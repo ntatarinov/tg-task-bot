@@ -1,0 +1,31 @@
+# Secrets — NEVER commit (contains the live bot token, Groq key, etc.)
+.env
+.env.*
+!.env.example
+
+# Local database — NEVER commit (real chat messages of colleagues + tasks)
+bot.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store

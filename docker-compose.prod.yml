@@ -1,0 +1,55 @@
+# Production deploy: bot runs in long-polling mode (no public domain / HTTPS needed).
+# LLM via Groq (cloud, OpenAI-compatible) — set the OPENAI_* vars in .env.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml run --rm bot alembic upgrade head
+#   docker compose -f docker-compose.prod.yml logs -f bot
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    command: python -m app.polling
+    env_file:
+      - .env
+    environment:
+      # Container networking: reach Postgres/Redis by service name, not localhost.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/tg_task_bot
+      REDIS_URL: redis://redis:6379/0
+      # Polling and webhook are mutually exclusive — keep webhook empty here.
+      WEBHOOK_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tg_task_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
