@@ -49,6 +49,8 @@
 - **B-16. Устойчивость** — retry `pending_analysis`, graceful Redis, safe-отправка Markdown.
 - **B-17. Локальный запуск и деплой** — polling, `init_db` для SQLite, `docker-compose.prod.yml`,
   `DEPLOY.md`, перенос на **Windows + Groq** (`WINDOWS_SETUP.md`).
+- **B-26. Готовность репозитория** — `LICENSE` (MIT), GitHub Actions CI
+  (`.github/workflows/ci.yml`: ruff + mypy + pytest на каждый push/PR), навигация в README.
 
 ---
 

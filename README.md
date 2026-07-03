@@ -1,5 +1,9 @@
 # TG Task Bot («Тудушка»)
 
+![CI](https://github.com/ntatarinov/tg-task-bot/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 Telegram-бот для анализа командного группового чата и автоматического формирования задач для разработчиков.
 
 > ## 🧭 Для разработчиков — начните отсюда
@@ -14,8 +18,8 @@ Telegram-бот для анализа командного группового 
 ## Что умеет
 
 - Читает все сообщения из группового чата
-- Сохраняет их в PostgreSQL (включая raw update JSON для отладки)
-- Анализирует обсуждения через LLM (mock без API-ключа, OpenAI если есть ключ)
+- Сохраняет их в БД (SQLite локально / PostgreSQL в Docker; + raw update JSON для отладки)
+- Анализирует обсуждения через LLM (mock без ключа; OpenAI / Groq / локальная Ollama по ключу)
 - Выделяет задачи из хаотичного обсуждения
 - Группирует сообщения по задачам (reply / related_task_id / похожесть заголовка)
 - Задаёт уточняющие вопросы (антиспам-защита через Redis с фолбэком на БД)
