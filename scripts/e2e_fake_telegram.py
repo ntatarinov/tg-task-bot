@@ -18,14 +18,17 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
+import pytz
 from aiohttp import web
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "123456:FAKE_TOKEN_FOR_LOCAL_TEST_ONLY"
 ALLOWED = -1001111111111
 FOREIGN = -1002222222222
+NEW_GROUP = -1003333333333
 ADMIN = 1000
 MEMBER = 2000
 PORT = 8765
@@ -120,6 +123,10 @@ async def main() -> None:
         "LLM_PROVIDER": "mock",
         "ALLOWED_CHAT_IDS": str(ALLOWED),
         "ADMIN_USER_IDS": str(ADMIN),
+        # Everything a run writes stays in the throwaway folder, out of the real project.
+        "SEEN_CHATS_PATH": str(workdir / "seen_chats.json"),
+        "STACKS_PATH": str(workdir / "stacks.json"),
+        "RESTART_FLAG_PATH": str(workdir / "restart.flag"),
         "ANALYSIS_INTERVAL_SECONDS": "1",
         "ANALYSIS_MIN_BATCH_MESSAGES": "1",
         "DASHBOARD_SECRET": "",
@@ -210,12 +217,53 @@ async def main() -> None:
         await wait_for(lambda: any("Сообщений в очереди" in t for t in texts(fake, ALLOWED)), 15, "/status")
         passed("/status answers")
 
+        # The main use: the bot is added to a group, colleagues talk, and the digests
+        # go out on their own at the set time.
+        fake.push("my_chat_member", {
+            "chat": {"id": NEW_GROUP, "type": "supergroup", "title": "Новая группа"},
+            "from": {"id": ADMIN, "is_bot": False, "first_name": "Admin"},
+            "date": int(time.time()),
+            "old_chat_member": {"status": "left", "user": {"id": 1, "is_bot": True, "first_name": "E2E"}},
+            "new_chat_member": {"status": "member", "user": {"id": 1, "is_bot": True, "first_name": "E2E"}},
+        })
+        seen = workdir / "seen_chats.json"
+        await wait_for(lambda: seen.exists() and "Новая группа" in seen.read_text(encoding="utf-8"), 15, "new group noted")
+        passed("a new group is noticed as soon as the bot is added")
+
+        for message_id, user_id, text in (
+            (20, 3001, "Нужно обновить документацию по релизу"),
+            (21, 3002, "Кто идёт на обед?"),
+            (22, 3003, "Надо проверить бэкапы базы биллинга"),
+        ):
+            fake.message(message_id, ALLOWED, user_id, text)
+        await wait_for(
+            lambda: rows(db, "SELECT COUNT(DISTINCT user_id) FROM messages WHERE telegram_message_id >= 20")[0][0] == 3,
+            15, "messages from three colleagues",
+        )
+        passed("messages from every colleague are read")
+
+        now = datetime.now(pytz.timezone("Asia/Almaty"))
+        fake.message(23, ALLOWED, ADMIN, f"/set_weekly {['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'][now.weekday()]}")
+        fake.message(24, ALLOWED, ADMIN, f"/set_digest_time {now:%H:%M}")
+
+        def scheduled(title: str) -> list[str]:
+            return [t for t in texts(fake, ALLOWED) if f"<b>{title} — " in t]
+
+        await wait_for(lambda: scheduled("Ежедневный дайджест") and scheduled("Еженедельный дайджест"), 100, "scheduled digests")
+        assert "документацию" in scheduled("Ежедневный дайджест")[0]
+        passed("daily and weekly digests arrive on schedule with the colleagues' work")
+
+        await asyncio.sleep(65)  # one more scheduler tick
+        assert len(scheduled("Ежедневный дайджест")) == 1 and len(scheduled("Еженедельный дайджест")) == 1
+        passed("each scheduled digest is sent once")
+
         # The process dies with a message still unanalyzed; it must survive the restart.
+        tasks_before = rows(db, "SELECT COUNT(*) FROM tasks")[0][0]
         bot.kill()
         bot.wait(timeout=15)
         fake.message(10, ALLOWED, MEMBER, "Нужно обновить сертификаты на стейдже")
         bot = start_bot(env, log)
-        await wait_for(lambda: rows(db, "SELECT COUNT(*) FROM tasks")[0][0] == 2, 40, "work after restart")
+        await wait_for(lambda: rows(db, "SELECT COUNT(*) FROM tasks")[0][0] == tasks_before + 1, 40, "work after restart")
         passed("after a crash the bot resumes and catches up")
     finally:
         bot.kill()

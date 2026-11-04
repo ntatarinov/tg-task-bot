@@ -20,7 +20,9 @@ def load() -> dict[str, dict[str, Any]]:
         return {}
 
 
-def remember(telegram_chat_id: int, title: str | None, chat_type: str) -> None:
+def remember(
+    telegram_chat_id: int, title: str | None, chat_type: str, present: bool = True
+) -> None:
     """
     Note a group the bot was added to but may not work in, so the panel can offer to allow it
     without anyone looking up an id. Only the id and the title are kept, never a message.
@@ -30,9 +32,10 @@ def remember(telegram_chat_id: int, title: str | None, chat_type: str) -> None:
         return
     known = load()
     key = str(telegram_chat_id)
-    if known.get(key, {}).get("title") == title:
+    entry = {"title": title, "type": chat_type, "present": present}
+    if known.get(key) == entry:
         return
-    known[key] = {"title": title, "type": chat_type}
+    known[key] = entry
     try:
         Path(settings.seen_chats_path).write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
     except OSError as e:

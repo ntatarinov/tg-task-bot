@@ -25,6 +25,11 @@ _LINE_RE = re.compile(r"^\s*([^:\n]{1,40}):\s*(.+)$")
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
+def plain_text(digest_html: str) -> str:
+    """A digest as text, for showing outside Telegram."""
+    return html.unescape(_TAG_RE.sub("", digest_html))
+
+
 def parse_chat(text: str) -> list[tuple[str, str]]:
     """Read pasted lines of "Автор: сообщение". A line without an author continues the previous one."""
     messages: list[tuple[str, str]] = []
@@ -96,7 +101,7 @@ async def run_sandbox(llm: BaseLLMClient, text: str) -> dict[str, Any]:
                 "rejected": rejected,
                 "failed": failed,
                 "topics": view,
-                "digest": html.unescape(_TAG_RE.sub("", digest.text)),
+                "digest": plain_text(digest.text),
             }
     finally:
         await engine.dispose()

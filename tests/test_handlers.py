@@ -690,6 +690,52 @@ async def test_persistent_database_error_does_not_crash_the_bot(harness, monkeyp
     assert await harness.query(select(MessageRow)) == []
 
 
+# --- Being added to and removed from groups ----------------------------------
+
+
+def _membership(harness, status: str, chat_id=FOREIGN_CHAT) -> dict:
+    bot = User(id=1, is_bot=True, first_name="Digest")
+    actor = User(id=MEMBER, is_bot=False, first_name="Аня")
+    old = "left" if status != "left" else "member"
+    return {
+        "chat": Chat(id=chat_id, type="supergroup", title="Новая группа"),
+        "from": actor,
+        "date": NOW,
+        "old_chat_member": {"status": old, "user": bot},
+        "new_chat_member": {"status": status, "user": bot, **({"until_date": 0} if status == "kicked" else {})},
+    }
+
+
+@pytest.mark.parametrize(
+    "status, present",
+    [("member", True), ("administrator", True), ("left", False), ("kicked", False)],
+)
+@pytest.mark.asyncio
+async def test_membership_changes_are_noted_at_once(harness, status, present):
+    from aiogram.types import ChatMemberUpdated
+
+    from app import seen_chats
+
+    new_member = _membership(harness, status)
+    if status == "administrator":
+        new_member["new_chat_member"].update(
+            can_be_edited=False, is_anonymous=False, can_manage_chat=True, can_delete_messages=True,
+            can_manage_video_chats=True, can_restrict_members=True, can_promote_members=False,
+            can_change_info=True, can_invite_users=True, can_post_stories=False, can_edit_stories=False,
+            can_delete_stories=False,
+        )
+    await harness.feed(my_chat_member=ChatMemberUpdated(**new_member))
+
+    entry = seen_chats.load()[str(FOREIGN_CHAT)]
+    assert entry["title"] == "Новая группа"
+    assert entry["present"] is present
+    assert harness.session.calls == []
+
+
+def test_membership_updates_are_requested_from_telegram():
+    assert "my_chat_member" in get_dispatcher().resolve_used_update_types()
+
+
 # --- Foreign chats -----------------------------------------------------------
 
 

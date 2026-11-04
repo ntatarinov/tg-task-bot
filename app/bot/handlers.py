@@ -8,12 +8,14 @@ from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
+    ChatMemberUpdated,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from app import seen_chats
 from app.bot.middleware import AccessMiddleware, is_admin
 from app.bot.utils import safe_answer, safe_send_message
 from app.config import settings
@@ -715,6 +717,15 @@ def _edit_time(message: Message) -> datetime:
     if isinstance(message.edit_date, int):
         return datetime.fromtimestamp(message.edit_date, tz=UTC)
     return message.edit_date or now_utc()
+
+
+@router.my_chat_member()
+async def on_membership_change(update: ChatMemberUpdated) -> None:
+    """Telegram has no call listing a bot's chats, so being added or removed is noted here:
+    a new group shows up in the panel at once, before anyone writes in it."""
+    present = update.new_chat_member.status in ("member", "administrator", "creator", "restricted")
+    seen_chats.remember(update.chat.id, update.chat.title, update.chat.type, present)
+    logger.info("bot.membership_changed", chat_id=update.chat.id, present=present)
 
 
 @router.edited_message()

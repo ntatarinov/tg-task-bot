@@ -1,7 +1,7 @@
 "use strict";
 
-// Everything from the server goes in through textContent: chat titles are written by
-// Telegram users, so nothing here may build HTML from strings.
+// Everything from the server goes in through textContent: chat titles and messages are
+// written by Telegram users, so nothing here may build HTML from strings.
 const $ = (id) => document.getElementById(id);
 const WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
 const KINDS = {
@@ -55,7 +55,7 @@ function showLogin() {
 async function showApp() {
   $("login").hidden = true;
   $("app").hidden = false;
-  await openTab("overview");
+  await openTab("summary");
 }
 
 async function openTab(name) {
@@ -63,65 +63,121 @@ async function openTab(name) {
     if (button.dataset.tab === name) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
-  for (const tab of ["overview", "sandbox", "stacks", "settings", "chats", "move"]) $(`tab-${tab}`).hidden = tab !== name;
-  if (name === "move") await loadMove();
-  if (name === "overview") await loadOverview();
+  for (const tab of ["summary", "settings", "sandbox", "move"]) $(`tab-${tab}`).hidden = tab !== name;
+  if (name === "summary") await loadSummary();
+  if (name === "settings") await Promise.all([loadSettings(), loadStacks(), loadChats()]);
   if (name === "sandbox") await loadSandbox();
-  if (name === "stacks") await loadStacks();
-  if (name === "settings") await loadSettings();
-  if (name === "chats") await loadChats();
+  if (name === "move") await loadMove();
+}
+
+function showRestart(text) {
+  $("restart-text").textContent = text;
+  $("restart").hidden = false;
+  $("restart-bar").hidden = false;
 }
 
 function fact(label, value) {
   return el("div", { class: "fact" }, el("span", { textContent: label }), el("strong", { textContent: value }));
 }
 
-function showRestart(text) {
-  $("restart-text").textContent = text;
-  $("restart-bar").hidden = false;
-}
+// --- Summary ----------------------------------------------------------------
 
-async function loadOverview() {
-  const data = await api("/api/overview");
-  const where = { local: "на этом сервере", external: "внешний сервис", mock: "тестовый режим" }[data.model_location];
-  $("summary").replaceChildren(
-    fact("Модель", data.model),
-    fact("Где работает", where),
-    fact("Анализ", data.analysis_blocked ? `на паузе: ${data.analysis_blocked}` : "работает"),
-    fact("Сообщений в очереди", String(data.pending)),
-    fact("Разрешённых чатов", String(data.allowed_chats)),
+function renderSetup(steps) {
+  const box = $("setup");
+  box.hidden = !steps.length;
+  box.replaceChildren(
+    el("h2", { textContent: "Что сделать, чтобы бот заработал" }),
+    el("ol", {}, ...steps.map((step) => el("li", { textContent: step }))),
   );
-  if (data.restart_pending) showRestart("Бот перезапускается. Если сообщение не исчезает, проверьте, что бот запущен.");
 }
 
-async function runChecks() {
-  const button = $("check");
+function detailLine(item) {
+  const parts = [];
+  if (item.owner !== undefined) parts.push(item.owner || "исполнитель не определён");
+  if (item.deadline) parts.push(`срок ${item.deadline}`);
+  return parts.length ? el("small", { textContent: parts.join(" · ") }) : null;
+}
+
+function taskRow(task) {
+  const done = el("button", { type: "button", class: "small", textContent: "Готово" });
+  done.addEventListener("click", async () => {
+    await api(`/api/tasks/${task.id}/status`, { method: "POST", body: JSON.stringify({ status: "done" }) });
+    await loadSummary();
+  });
+  return el("li", { class: "row" },
+    el("div", {}, el("span", { textContent: task.text }), detailLine(task)),
+    done,
+  );
+}
+
+function board(title, rows, empty) {
+  return el("section", { class: "column" },
+    el("h3", { textContent: rows.length ? `${title} · ${rows.length}` : title }),
+    rows.length ? el("ul", {}, ...rows) : el("p", { class: "hint", textContent: empty }),
+  );
+}
+
+function plainRow(item) {
+  return el("li", {}, el("span", { textContent: item.text }), detailLine(item));
+}
+
+async function loadSummary() {
+  const chatId = $("summary-chat").value;
+  const query = new URLSearchParams({ days: $("summary-days").value });
+  if (chatId) query.set("chat_id", chatId);
+  const data = await api(`/api/summary?${query}`);
+  renderSetup(data.setup);
+
+  const select = $("summary-chat");
+  select.replaceChildren(
+    ...data.chats.map((chat) => el("option", { value: String(chat.id), textContent: chat.title || "Без названия" })),
+  );
+  if (data.chat_id) select.value = String(data.chat_id);
+
+  if (!data.chat_id) {
+    $("summary-body").replaceChildren(el("p", { class: "hint", textContent: "Здесь появятся решения и задачи, когда бот начнёт работать в чате." }));
+    $("digest-meta").textContent = "";
+    $("digest-text").textContent = "";
+    return;
+  }
+  $("summary-body").replaceChildren(
+    board("Решения", data.decisions.map(plainRow), "Подтверждённых решений нет."),
+    board("Задачи", data.tasks.map(taskRow), "Открытых задач нет."),
+    board("Блокеры", data.blockers.map(plainRow), "Блокеров нет."),
+    board("Открытые вопросы", data.questions.map(plainRow), "Вопросов нет."),
+  );
+  if (data.pending) {
+    $("summary-body").append(el("p", { class: "hint wide", textContent: `Ещё не разобрано сообщений: ${data.pending}.` }));
+  }
+  $("digest-meta").textContent = data.digest
+    ? `Последний отчёт: ${new Date(data.digest.sent_at).toLocaleString("ru-RU")}`
+    : "Отчётов пока не было.";
+  $("digest-text").textContent = data.digest ? data.digest.text : "";
+}
+
+async function buildDigest() {
+  const button = $("digest-build");
   button.disabled = true;
-  button.textContent = "Проверяю…";
-  const list = $("check-results");
+  $("digest-meta").textContent = "Собираю отчёт…";
   try {
-    const data = await api("/api/check", { method: "POST" });
-    const labels = { ok: "ОК", warn: "ВНИМАНИЕ", fail: "ОШИБКА" };
-    list.replaceChildren(
-      ...data.items.map((item) =>
-        el("li", {},
-          el("span", { class: `mark ${item.state}`, textContent: labels[item.state] }),
-          el("span", { textContent: item.text }),
-          item.fix ? el("small", { textContent: item.fix }) : null,
-        ),
-      ),
-    );
+    const data = await api("/api/digest-preview", {
+      method: "POST",
+      body: JSON.stringify({ chat_id: Number($("summary-chat").value), days: Number($("summary-days").value) }),
+    });
+    $("digest-text").textContent = data.text;
+    $("digest-meta").textContent = "Предпросмотр. В чат ничего не отправлено.";
   } catch (error) {
-    list.replaceChildren(el("li", { class: "error", textContent: error.message }));
+    $("digest-meta").textContent = error.message;
   } finally {
     button.disabled = false;
-    button.textContent = "Проверить";
   }
 }
 
+// --- Step 1: connection -----------------------------------------------------
+
 let settingFields = [];
 
-function renderControl(field, models) {
+function renderControl(field) {
   const id = `f-${field.key}`;
   if (field.kind === "bool") {
     return el("input", { id, type: "checkbox", checked: field.value === "true", disabled: field.locked });
@@ -133,7 +189,7 @@ function renderControl(field, models) {
     }
     return select;
   }
-  const input = el("input", {
+  return el("input", {
     id,
     type: field.kind === "secret" ? "password" : "text",
     autocomplete: "off",
@@ -141,19 +197,15 @@ function renderControl(field, models) {
     value: field.kind === "secret" ? "" : field.value,
     placeholder: field.kind === "secret" ? (field.is_set ? "Задан. Оставьте пустым, чтобы не менять" : "Не задан") : "",
   });
-  if (field.key === "OPENAI_MODEL" && models.length) {
-    input.setAttribute("list", "installed-models");
-  }
-  return input;
 }
 
-function renderField(field, models) {
+function renderField(field) {
   const id = `f-${field.key}`;
   const note = field.locked ? "Значение задано на сервере и здесь не меняется." : field.help;
   const error = el("p", { id: `e-${field.key}`, class: "error", role: "alert" });
   if (field.kind === "bool") {
     const parts = [
-      el("div", { class: "check-row" }, renderControl(field, models), el("label", { htmlFor: id, textContent: field.label })),
+      el("div", { class: "check-row" }, renderControl(field), el("label", { htmlFor: id, textContent: field.label })),
       note ? el("small", { textContent: note }) : null,
     ];
     if (field.key === "LLM_EXTERNAL_ALLOWED") {
@@ -168,26 +220,28 @@ function renderField(field, models) {
   }
   return el("div", { class: "field" },
     el("label", { htmlFor: id, textContent: field.label }),
-    renderControl(field, models),
+    renderControl(field),
     note ? el("small", { textContent: note }) : null,
     error,
   );
 }
 
 async function loadSettings() {
-  const [{ fields }, { models }] = await Promise.all([api("/api/settings"), api("/api/models")]);
+  const { fields } = await api("/api/settings");
   settingFields = fields;
+  $("fields-basic").replaceChildren(
+    el("fieldset", {}, ...fields.filter((f) => f.basic).map(renderField)),
+  );
   const groups = new Map();
-  for (const field of fields) {
+  for (const field of fields.filter((f) => !f.basic)) {
     if (!groups.has(field.group)) groups.set(field.group, []);
     groups.get(field.group).push(field);
   }
   const nodes = [];
   for (const [group, items] of groups) {
-    nodes.push(el("fieldset", {}, el("legend", { textContent: group }), ...items.map((f) => renderField(f, models))));
+    nodes.push(el("fieldset", {}, el("legend", { textContent: group }), ...items.map(renderField)));
   }
-  const datalist = el("datalist", { id: "installed-models" }, ...models.map((m) => el("option", { value: m })));
-  $("fields").replaceChildren(datalist, ...nodes);
+  $("fields-advanced").replaceChildren(...nodes);
   $("save-status").textContent = "";
 }
 
@@ -211,7 +265,6 @@ async function saveSettings(event) {
       method: "POST",
       body: JSON.stringify({ values: collectValues(), confirm_external: $("confirm-external").checked }),
     });
-    status.textContent = result.changed.length ? `Сохранено настроек: ${result.changed.length}` : "Изменений нет.";
     if (result.restart_needed) showRestart("Настройки сохранены. Они заработают после перезапуска бота.");
     await loadSettings();
     status.textContent = result.changed.length ? `Сохранено настроек: ${result.changed.length}` : "Изменений нет.";
@@ -229,222 +282,29 @@ async function saveSettings(event) {
   }
 }
 
-function chatCard(chat) {
-  const prefix = `c${chat.id}`;
-  const tz = el("input", { id: `${prefix}-tz`, value: chat.timezone });
-  const time = el("input", { id: `${prefix}-time`, value: chat.digest_time });
-  const daily = el("input", { id: `${prefix}-daily`, type: "checkbox", checked: chat.digest_enabled });
-  const weekly = el("input", { id: `${prefix}-weekly`, type: "checkbox", checked: chat.weekly_digest_enabled });
-  const day = el("select", { id: `${prefix}-day` },
-    ...WEEKDAYS.map((name, index) => el("option", { value: String(index), textContent: name, selected: index === chat.weekly_digest_day })),
-  );
-  const target = el("input", { id: `${prefix}-target`, value: chat.digest_chat_id ?? "", placeholder: "Этот чат" });
-  const status = el("span", { role: "status" });
-  const save = el("button", { type: "button", class: "primary", textContent: "Сохранить" });
-
-  save.addEventListener("click", async () => {
-    const raw = target.value.trim();
-    const body = {
-      timezone: tz.value.trim(),
-      digest_time: time.value.trim(),
-      digest_enabled: daily.checked,
-      weekly_digest_enabled: weekly.checked,
-      weekly_digest_day: Number(day.value),
-    };
-    if (raw) body.digest_chat_id = Number(raw);
-    else body.clear_digest_chat = true;
-    status.textContent = "Сохраняю…";
-    try {
-      await api(`/api/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      status.textContent = "Сохранено.";
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  });
-
-  const access = el("button", { type: "button", textContent: chat.allowed ? "Запретить" : "Разрешить" });
-  access.addEventListener("click", () => setAccess(chat.telegram_chat_id, !chat.allowed));
-
-  // Deleting is permanent, so the first press only arms the button.
-  const purge = el("button", { type: "button", textContent: "Очистить данные чата" });
-  let armed = false;
-  purge.addEventListener("click", async () => {
-    if (!armed) {
-      armed = true;
-      purge.textContent = "Удалить сообщения, темы и отчёты?";
-      return;
-    }
-    try {
-      const result = await api(`/api/chats/${chat.id}/purge`, { method: "POST", body: JSON.stringify({ confirm: true }) });
-      status.textContent = `Удалено сообщений: ${result.removed}`;
-      purge.textContent = "Очистить данные чата";
-      armed = false;
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  });
-
-  const lastDigest = chat.last_digest_at ? new Date(chat.last_digest_at).toLocaleString("ru-RU") : "ещё не было";
-  return el("article", { class: "chat" },
-    el("div", { class: "chat-head" },
-      el("h3", { textContent: chat.title || "Без названия" }),
-      el("code", { textContent: String(chat.telegram_chat_id) }),
-      el("span", { class: `pill ${chat.allowed ? "on" : "off"}`, textContent: chat.allowed ? "Разрешён" : "Не разрешён" }),
-    ),
-    el("div", { class: "grid2" },
-      el("div", { class: "field" }, el("label", { htmlFor: tz.id, textContent: "Часовой пояс" }), tz),
-      el("div", { class: "field" }, el("label", { htmlFor: time.id, textContent: "Время отчёта" }), time),
-      el("div", { class: "field" }, el("label", { htmlFor: day.id, textContent: "День еженедельного отчёта" }), day),
-      el("div", { class: "field" }, el("label", { htmlFor: target.id, textContent: "Куда отправлять" }), target),
-    ),
-    el("div", { class: "check-row" }, daily, el("label", { htmlFor: daily.id, textContent: "Ежедневный отчёт" })),
-    el("div", { class: "check-row" }, weekly, el("label", { htmlFor: weekly.id, textContent: "Еженедельный отчёт" })),
-    el("div", { class: "chat-foot" }, save, access, purge, status),
-    el("div", { class: "chat-foot" },
-      el("span", { textContent: `В очереди: ${chat.pending}` }),
-      el("span", { textContent: `Последний отчёт: ${lastDigest}` }),
-    ),
-  );
-}
-
-async function setAccess(telegramChatId, allowed) {
-  await api("/api/chats/access", {
-    method: "POST",
-    body: JSON.stringify({ telegram_chat_id: telegramChatId, allowed }),
-  });
-  showRestart("Список чатов изменён. Он заработает после перезапуска бота.");
-  await loadChats();
-}
-
-function waitingCard(chat, note) {
-  const allow = el("button", { type: "button", class: "primary", textContent: "Разрешить" });
-  allow.addEventListener("click", () => setAccess(chat.telegram_chat_id, true));
-  return el("article", { class: "chat" },
-    el("div", { class: "chat-head" },
-      el("h3", { textContent: chat.title || "Без названия" }),
-      el("code", { textContent: String(chat.telegram_chat_id) }),
-      el("span", { class: "pill off", textContent: "Ждёт разрешения" }),
-    ),
-    el("p", { class: "hint", textContent: note }),
-    el("div", { class: "chat-foot" }, allow),
-  );
-}
-
-function allowedEmptyCard(chat) {
-  const forbid = el("button", { type: "button", textContent: "Запретить" });
-  forbid.addEventListener("click", () => setAccess(chat.telegram_chat_id, false));
-  return el("article", { class: "chat" },
-    el("div", { class: "chat-head" },
-      el("h3", { textContent: "Сообщений пока нет" }),
-      el("code", { textContent: String(chat.telegram_chat_id) }),
-      el("span", { class: "pill on", textContent: "Разрешён" }),
-    ),
-    el("div", { class: "chat-foot" }, forbid),
-  );
-}
-
-async function loadChats() {
-  const data = await api("/api/chats");
-  $("waiting").replaceChildren(
-    ...data.waiting.map((chat) => waitingCard(chat, "Бот в этой группе, но пока её игнорирует.")),
-  );
-  const cards = [...data.chats.map(chatCard), ...data.allowed_without_messages.map(allowedEmptyCard)];
-  $("chats").replaceChildren(
-    ...(cards.length || data.waiting.length
-      ? cards
-      : [el("p", { class: "hint", textContent: "Чатов пока нет. Добавьте бота в группу и напишите там сообщение." })]),
-  );
-}
-
-let sandboxStacks = [];
-
-async function loadSandbox() {
-  const data = await api("/api/stacks");
-  sandboxStacks = [data.current, ...data.stacks];
-  const select = $("sandbox-stack");
-  const chosen = select.value;
-  select.replaceChildren(
-    ...sandboxStacks.map((stack) => el("option", { value: stack.id, textContent: `${stack.name} (${stack.model})` })),
-  );
-  if (chosen) select.value = chosen;
-  if (!$("sandbox-text").value) $("sandbox-text").value = SAMPLE;
-  updateSandboxConsent();
-}
-
-function updateSandboxConsent() {
-  const stack = sandboxStacks.find((s) => s.id === $("sandbox-stack").value);
-  $("sandbox-confirm").hidden = !(stack && stack.external);
-}
-
-function resultCard(data) {
-  const topics = data.topics.map((topic) =>
-    el("div", {},
-      el("strong", { textContent: topic.project ? `${topic.title} · ${topic.project}` : topic.title }),
-      el("ul", {}, ...topic.items.map((item) => {
-        const details = [item.owner && `исполнитель: ${item.owner}`, item.deadline && `срок: ${item.deadline}`].filter(Boolean);
-        return el("li", { class: item.status === "open" ? "" : "muted-item" },
-          el("span", { class: "kind", textContent: `${KINDS[item.kind] || item.kind}: ` }),
-          `${item.text}${details.length ? ` (${details.join(", ")})` : ""}`,
-        );
-      })),
-    ),
-  );
-  const notes = [];
-  if (data.rejected) notes.push(`отброшено проверками: ${data.rejected}`);
-  if (data.failed) notes.push(`не обработано сообщений: ${data.failed}`);
-  return el("article", { class: "result" },
-    el("div", { class: "result-head" },
-      document.createTextNode(data.stack),
-      el("span", { textContent: `${data.model} · ${data.seconds} с · сообщений: ${data.messages}` }),
-    ),
-    notes.length ? el("p", { class: "error", textContent: notes.join("; ") }) : null,
-    ...(topics.length ? topics : [el("p", { class: "hint", textContent: "Рабочих тем не найдено." })]),
-    el("details", {}, el("summary", { textContent: "Как будет выглядеть дайджест" }), el("pre", { textContent: data.digest })),
-  );
-}
-
-async function runSandbox() {
-  const button = $("sandbox-run");
-  const status = $("sandbox-status");
-  button.disabled = true;
-  status.textContent = "Модель разбирает переписку. Без видеокарты это может занять несколько минут.";
-  try {
-    const data = await api("/api/sandbox", {
-      method: "POST",
-      body: JSON.stringify({
-        stack_id: $("sandbox-stack").value,
-        text: $("sandbox-text").value,
-        confirm_external: $("sandbox-confirm-box").checked,
-      }),
-    });
-    $("sandbox-results").prepend(resultCard(data));
-    status.textContent = "Готово.";
-  } catch (error) {
-    status.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-}
+// --- Step 1: model ----------------------------------------------------------
 
 function stackCard(stack, installed) {
-  const place = stack.external ? "Внешний сервис" : "Локально";
+  const place = stack.external ? "Внешний сервис" : "На этом стенде";
   const missing = !stack.external && installed.length && !installed.includes(stack.model);
   const confirmBox = el("input", { id: `confirm-${stack.id}`, type: "checkbox" });
   const status = el("span", { role: "status" });
-  const apply = el("button", { type: "button", class: "primary", textContent: "Применить", disabled: stack.active });
-  apply.addEventListener("click", async () => {
-    status.textContent = "Применяю…";
-    try {
-      await api(`/api/stacks/${stack.id}/apply`, {
-        method: "POST",
-        body: JSON.stringify({ confirm_external: confirmBox.checked }),
-      });
-      showRestart("Вариант применён. Он заработает после перезапуска бота.");
-      await loadStacks();
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  });
+  const apply = stack.active ? null : el("button", { type: "button", textContent: "Выбрать" });
+  if (apply) {
+    apply.addEventListener("click", async () => {
+      status.textContent = "Применяю…";
+      try {
+        await api(`/api/stacks/${stack.id}/apply`, {
+          method: "POST",
+          body: JSON.stringify({ confirm_external: confirmBox.checked }),
+        });
+        showRestart("Модель выбрана. Она заработает после перезапуска бота.");
+        await loadStacks();
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    });
+  }
   const remove = stack.builtin ? null : el("button", { type: "button", textContent: "Удалить" });
   if (remove) {
     remove.addEventListener("click", async () => {
@@ -456,14 +316,15 @@ function stackCard(stack, installed) {
     el("div", { class: "chat-head" },
       el("h3", { textContent: stack.name }),
       el("span", { class: `pill ${stack.active ? "on" : "off"}`, textContent: stack.active ? "Используется" : place }),
+      apply,
+      remove,
     ),
-    el("code", { textContent: `${stack.model} · ${stack.base_url || "api.openai.com"}` }),
-    missing ? el("p", { class: "error", textContent: "Модель не скачана. Скачайте её ниже." }) : null,
+    missing ? el("p", { class: "error", textContent: "Модель не скачана: скачайте её в разделе ниже." }) : null,
     stack.external && !stack.active
       ? el("div", { class: "confirm" }, confirmBox,
           el("label", { htmlFor: confirmBox.id, textContent: "Владелец данных разрешил отправлять переписку этому сервису." }))
       : null,
-    el("div", { class: "chat-foot" }, apply, remove, status),
+    status,
   );
 }
 
@@ -517,13 +378,272 @@ async function pullModel(event) {
   }, 2000);
 }
 
+// --- Step 1: chats ----------------------------------------------------------
+
+async function setAccess(telegramChatId, allowed) {
+  await api("/api/chats/access", {
+    method: "POST",
+    body: JSON.stringify({ telegram_chat_id: telegramChatId, allowed }),
+  });
+  showRestart("Список чатов изменён. Он заработает после перезапуска бота.");
+  await loadChats();
+}
+
+function waitingCard(chat) {
+  const allow = el("button", { type: "button", class: "primary", textContent: "Разрешить" });
+  allow.addEventListener("click", () => setAccess(chat.telegram_chat_id, true));
+  return el("article", { class: "chat" },
+    el("div", { class: "chat-head" },
+      el("h3", { textContent: chat.title || "Без названия" }),
+      el("span", { class: "pill off", textContent: "Ждёт разрешения" }),
+      allow,
+    ),
+  );
+}
+
+function allowedEmptyCard(chat) {
+  const forbid = el("button", { type: "button", textContent: "Запретить" });
+  forbid.addEventListener("click", () => setAccess(chat.telegram_chat_id, false));
+  return el("article", { class: "chat" },
+    el("div", { class: "chat-head" },
+      el("h3", { textContent: String(chat.telegram_chat_id) }),
+      el("span", { class: "pill on", textContent: "Разрешён, сообщений пока нет" }),
+      forbid,
+    ),
+  );
+}
+
+function chatCard(chat) {
+  const prefix = `c${chat.id}`;
+  const tz = el("input", { id: `${prefix}-tz`, value: chat.timezone });
+  const time = el("input", { id: `${prefix}-time`, value: chat.digest_time });
+  const daily = el("input", { id: `${prefix}-daily`, type: "checkbox", checked: chat.digest_enabled });
+  const weekly = el("input", { id: `${prefix}-weekly`, type: "checkbox", checked: chat.weekly_digest_enabled });
+  const day = el("select", { id: `${prefix}-day` },
+    ...WEEKDAYS.map((name, index) => el("option", { value: String(index), textContent: name, selected: index === chat.weekly_digest_day })),
+  );
+  const target = el("input", { id: `${prefix}-target`, value: chat.digest_chat_id ?? "", placeholder: "Этот чат" });
+  const status = el("span", { role: "status" });
+  const save = el("button", { type: "button", class: "primary", textContent: "Сохранить" });
+
+  save.addEventListener("click", async () => {
+    const raw = target.value.trim();
+    const body = {
+      timezone: tz.value.trim(),
+      digest_time: time.value.trim(),
+      digest_enabled: daily.checked,
+      weekly_digest_enabled: weekly.checked,
+      weekly_digest_day: Number(day.value),
+    };
+    if (raw) body.digest_chat_id = Number(raw);
+    else body.clear_digest_chat = true;
+    status.textContent = "Сохраняю…";
+    try {
+      await api(`/api/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      status.textContent = "Сохранено.";
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  const access = el("button", {
+    type: "button",
+    class: chat.allowed ? "" : "primary",
+    textContent: chat.allowed ? "Запретить" : "Разрешить",
+  });
+  access.addEventListener("click", () => setAccess(chat.telegram_chat_id, !chat.allowed));
+
+  // Deleting is permanent, so the first press only arms the button.
+  const purge = el("button", { type: "button", textContent: "Очистить данные чата" });
+  let armed = false;
+  purge.addEventListener("click", async () => {
+    if (!armed) {
+      armed = true;
+      purge.textContent = "Удалить сообщения, темы и отчёты?";
+      return;
+    }
+    try {
+      const result = await api(`/api/chats/${chat.id}/purge`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+      status.textContent = `Удалено сообщений: ${result.removed}`;
+      purge.textContent = "Очистить данные чата";
+      armed = false;
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  return el("article", { class: "chat" },
+    el("div", { class: "chat-head" },
+      el("h3", { textContent: chat.title || "Без названия" }),
+      el("span", { class: `pill ${chat.allowed ? "on" : "off"}`, textContent: chat.allowed ? "Разрешён" : "Не разрешён" }),
+      access,
+    ),
+    el("details", {},
+      el("summary", { textContent: `Отчёты: ${chat.digest_enabled ? `каждый день в ${chat.digest_time}` : "выключены"}` }),
+      el("div", { class: "stack" },
+        el("div", { class: "grid2" },
+          el("div", { class: "field" }, el("label", { htmlFor: time.id, textContent: "Время отчёта" }), time),
+          el("div", { class: "field" }, el("label", { htmlFor: tz.id, textContent: "Часовой пояс" }), tz),
+          el("div", { class: "field" }, el("label", { htmlFor: day.id, textContent: "День еженедельного отчёта" }), day),
+          el("div", { class: "field" }, el("label", { htmlFor: target.id, textContent: "Куда отправлять" }), target),
+        ),
+        el("div", { class: "check-row" }, daily, el("label", { htmlFor: daily.id, textContent: "Ежедневный отчёт" })),
+        el("div", { class: "check-row" }, weekly, el("label", { htmlFor: weekly.id, textContent: "Еженедельный отчёт" })),
+        el("div", { class: "chat-foot" }, save, purge, status),
+      ),
+    ),
+  );
+}
+
+async function loadChats() {
+  const data = await api("/api/chats");
+  $("waiting").replaceChildren(...data.waiting.map(waitingCard));
+  const cards = [...data.chats.map(chatCard), ...data.allowed_without_messages.map(allowedEmptyCard)];
+  $("chats").replaceChildren(
+    ...(cards.length || data.waiting.length ? cards : [el("p", { class: "hint", textContent: "Чатов пока нет." })]),
+  );
+}
+
+function presenceRow(chat) {
+  const labels = { in: "ЕСТЬ", out: "НЕТ", moved: "НОВЫЙ ID" };
+  const marks = { in: "ok", out: "fail", moved: "warn" };
+  const note = chat.state === "moved"
+    ? `Группа стала супергруппой, её новый ID: ${chat.moved_to}.`
+    : chat.state === "in" && !chat.allowed ? "Бот здесь, но чат не разрешён." : "";
+  const targetId = chat.state === "moved" ? chat.moved_to : chat.telegram_chat_id;
+  const canAllow = (chat.state === "in" && !chat.allowed) || chat.state === "moved";
+  const allow = canAllow ? el("button", { type: "button", class: "small", textContent: "Разрешить" }) : null;
+  if (allow) allow.addEventListener("click", () => setAccess(targetId, true));
+  return el("li", {},
+    el("span", { class: `mark ${marks[chat.state]}`, textContent: labels[chat.state] }),
+    el("span", {}, `${chat.title || chat.telegram_chat_id}${chat.allowed ? " (разрешён)" : ""} `, allow),
+    note ? el("small", { textContent: note }) : null,
+  );
+}
+
+async function checkPresence() {
+  const button = $("presence");
+  const status = $("presence-status");
+  button.disabled = true;
+  status.textContent = "Спрашиваю Telegram…";
+  try {
+    const data = await api("/api/chats/presence", { method: "POST" });
+    $("presence-results").replaceChildren(...data.chats.map(presenceRow));
+    status.textContent = data.chats.length
+      ? `Бот @${data.bot}. Telegram не даёт полный список чатов, здесь только известные.`
+      : `Бот @${data.bot}. Известных чатов нет: добавьте его в группу, пока он запущен.`;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// --- Step 2: checks ---------------------------------------------------------
+
+async function runChecks() {
+  const button = $("check");
+  button.disabled = true;
+  button.textContent = "Проверяю…";
+  const list = $("check-results");
+  try {
+    const data = await api("/api/check", { method: "POST" });
+    const labels = { ok: "ОК", warn: "ВНИМАНИЕ", fail: "ОШИБКА" };
+    list.replaceChildren(
+      ...data.items.map((item) =>
+        el("li", {},
+          el("span", { class: `mark ${item.state}`, textContent: labels[item.state] }),
+          el("span", { textContent: item.text }),
+          item.fix ? el("small", { textContent: item.fix }) : null,
+        ),
+      ),
+    );
+  } catch (error) {
+    list.replaceChildren(el("li", { class: "error", textContent: error.message }));
+  } finally {
+    button.disabled = false;
+    button.textContent = "Проверить всё";
+  }
+}
+
+let sandboxStacks = [];
+
+async function loadSandbox() {
+  const data = await api("/api/stacks");
+  sandboxStacks = [data.current, ...data.stacks];
+  const select = $("sandbox-stack");
+  const chosen = select.value;
+  select.replaceChildren(
+    ...sandboxStacks.map((stack) => el("option", { value: stack.id, textContent: `${stack.name} (${stack.model})` })),
+  );
+  if (chosen) select.value = chosen;
+  if (!$("sandbox-text").value) $("sandbox-text").value = SAMPLE;
+  updateSandboxConsent();
+}
+
+function updateSandboxConsent() {
+  const stack = sandboxStacks.find((s) => s.id === $("sandbox-stack").value);
+  $("sandbox-confirm").hidden = !(stack && stack.external);
+}
+
+function resultCard(data) {
+  const topics = data.topics.map((topic) =>
+    el("div", {},
+      el("strong", { textContent: topic.project ? `${topic.title} · ${topic.project}` : topic.title }),
+      el("ul", {}, ...topic.items.map((item) => {
+        const details = [item.owner && `исполнитель: ${item.owner}`, item.deadline && `срок: ${item.deadline}`].filter(Boolean);
+        return el("li", { class: item.status === "open" ? "" : "muted-item" },
+          el("span", { class: "kind", textContent: `${KINDS[item.kind] || item.kind}: ` }),
+          `${item.text}${details.length ? ` (${details.join(", ")})` : ""}`,
+        );
+      })),
+    ),
+  );
+  const notes = [];
+  if (data.rejected) notes.push(`отброшено проверками: ${data.rejected}`);
+  if (data.failed) notes.push(`не обработано сообщений: ${data.failed}`);
+  return el("article", { class: "result" },
+    el("div", { class: "result-head" },
+      document.createTextNode(data.stack),
+      el("span", { textContent: `${data.model} · ${data.seconds} с` }),
+    ),
+    notes.length ? el("p", { class: "error", textContent: notes.join("; ") }) : null,
+    ...(topics.length ? topics : [el("p", { class: "hint", textContent: "Рабочих тем не найдено." })]),
+    el("details", {}, el("summary", { textContent: "Как будет выглядеть отчёт" }), el("pre", { class: "digest", textContent: data.digest })),
+  );
+}
+
+async function runSandbox() {
+  const button = $("sandbox-run");
+  const status = $("sandbox-status");
+  button.disabled = true;
+  status.textContent = "Модель разбирает переписку. Без видеокарты это может занять несколько минут.";
+  try {
+    const data = await api("/api/sandbox", {
+      method: "POST",
+      body: JSON.stringify({
+        stack_id: $("sandbox-stack").value,
+        text: $("sandbox-text").value,
+        confirm_external: $("sandbox-confirm-box").checked,
+      }),
+    });
+    $("sandbox-results").prepend(resultCard(data));
+    status.textContent = "Готово.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// --- Step 3: moving ---------------------------------------------------------
+
 async function loadMove() {
   const data = await api("/api/migration");
   $("move-summary").replaceChildren(
     fact("Сообщений", String(data.messages)),
     fact("Чатов", String(data.chats)),
     fact("Размер базы", data.database_included ? `${data.database_mb} МБ` : "не входит в архив"),
-    fact("Своих вариантов стека", String(data.custom_stacks)),
   );
   $("move-warning").hidden = data.database_included;
 }
@@ -550,6 +670,8 @@ async function exportBundle(event) {
   status.textContent = "Архив скачан.";
 }
 
+// --- Wiring -----------------------------------------------------------------
+
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   $("login-error").textContent = "";
@@ -572,13 +694,17 @@ $("tabs").addEventListener("click", (event) => {
   if (tab) openTab(tab).catch(() => {});
 });
 
-$("check").addEventListener("click", runChecks);
+$("summary-chat").addEventListener("change", () => loadSummary().catch(() => {}));
+$("summary-days").addEventListener("change", () => loadSummary().catch(() => {}));
+$("digest-build").addEventListener("click", buildDigest);
 $("settings-form").addEventListener("submit", saveSettings);
-$("sandbox-run").addEventListener("click", runSandbox);
-$("export-form").addEventListener("submit", exportBundle);
-$("sandbox-stack").addEventListener("change", updateSandboxConsent);
 $("stack-form").addEventListener("submit", addStack);
 $("pull-form").addEventListener("submit", pullModel);
+$("check").addEventListener("click", runChecks);
+$("presence").addEventListener("click", checkPresence);
+$("sandbox-run").addEventListener("click", runSandbox);
+$("sandbox-stack").addEventListener("change", updateSandboxConsent);
+$("export-form").addEventListener("submit", exportBundle);
 
 $("restart").addEventListener("click", async () => {
   await api("/api/restart", { method: "POST" });

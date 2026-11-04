@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -31,16 +31,26 @@ from app import doctor, seen_chats, stacks
 from app.bundle import ROOT as PROJECT_ROOT
 from app.bundle import build_bundle
 from app.config import _parse_id_list, reload_settings, settings
-from app.db.models import Chat, Digest, Message
-from app.db.repositories import ChatRepository, MessageRepository
+from app.db.models import (
+    Chat,
+    Digest,
+    Message,
+    TaskStatus,
+    TopicItem,
+    TopicItemKind,
+    TopicItemStatus,
+)
+from app.db.repositories import ChatRepository, MessageRepository, TaskRepository, TopicRepository
 from app.db.session import get_session
 from app.env_file import read_env, update_env
 from app.llm.base import LLMError
 from app.llm.openai_client import is_local_endpoint, llm_block_reason
+from app.services.digest_service import DigestService
 from app.services.retention import RetentionService
-from app.services.sandbox import MAX_SANDBOX_CHARS, run_sandbox
+from app.services.sandbox import MAX_SANDBOX_CHARS, plain_text, run_sandbox
+from app.services.scheduler import _make_llm
 from app.utils.logging import configure_logging, get_logger
-from app.utils.time import ensure_aware_utc, is_valid_digest_time, is_valid_timezone
+from app.utils.time import ensure_aware_utc, is_valid_digest_time, is_valid_timezone, now_utc
 
 logger = get_logger(__name__)
 
@@ -100,6 +110,8 @@ FIELDS: tuple[Field, ...] = (
     Field("TELEGRAM_API_BASE", "Свой сервер Bot API", "Сервер", "url", "Обычно пусто."),
 )
 FIELDS_BY_KEY = {f.key: f for f in FIELDS}
+# All most people ever touch; the rest stays folded away.
+BASIC_KEYS = {"BOT_TOKEN", "ADMIN_USER_IDS"}
 
 
 def validate_value(field: Field, value: str) -> str | None:
@@ -213,6 +225,15 @@ class AccessBody(BaseModel):
     allowed: bool
 
 
+class TaskStatusBody(BaseModel):
+    status: str
+
+
+class DigestPreviewBody(BaseModel):
+    chat_id: int
+    days: int = 7
+
+
 class ExportBody(BaseModel):
     password: str
 
@@ -311,6 +332,7 @@ async def get_settings() -> dict[str, Any]:
         entry: dict[str, Any] = {
             "key": field.key, "label": field.label, "group": field.group, "kind": field.kind,
             "help": field.help, "options": list(field.options), "locked": locked,
+            "basic": field.key in BASIC_KEYS,
         }
         if field.kind == "secret":
             entry["is_set"] = bool(value)  # the value itself never reaches the browser
@@ -354,6 +376,112 @@ async def save_settings(body: SettingsBody) -> dict[str, Any]:
         reload_settings()
         logger.info("panel.settings_changed", keys=sorted(changes))
     return {"changed": sorted(changes), "restart_needed": bool(changes)}
+
+
+def _setup_steps(models: list[str]) -> list[str]:
+    """What stands between this install and a working bot, in the order to do it."""
+    steps: list[str] = []
+    if settings.bot_token in ("", "placeholder"):
+        steps.append("Вставьте токен бота в разделе «Настройка».")
+    if not settings.admins:
+        steps.append("Укажите свой Telegram ID в разделе «Настройка».")
+    if not settings.allowed_chats:
+        steps.append("Добавьте бота в группу, напишите там сообщение и разрешите её в разделе «Настройка».")
+    if llm_block_reason():
+        steps.append("Выберите модель в разделе «Настройка». Сейчас анализ на паузе.")
+    elif is_local_endpoint(settings.openai_base_url) and models and settings.openai_model not in models:
+        steps.append(f"Скачайте модель {settings.openai_model} в разделе «Настройка».")
+    return steps
+
+
+def _item_view(item: TopicItem) -> dict[str, Any]:
+    return {"text": item.text, "topic": item.topic.title}
+
+
+@app.get("/api/summary", dependencies=[Depends(require_session)])
+async def summary(
+    chat_id: int | None = None, days: int = 7, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """The page people open the panel for: what was decided and what is left to do."""
+    chats = await ChatRepository(session).get_all_active()
+    # Chats the bot works in first, then the busiest history.
+    chats.sort(key=lambda c: (c.telegram_chat_id not in settings.allowed_chats, c.id))
+    models = (await installed_models())["models"]
+    result: dict[str, Any] = {
+        "setup": _setup_steps(models),
+        "chats": [{"id": c.id, "title": c.title} for c in chats if c.telegram_chat_id < 0],
+        "chat_id": None,
+    }
+    group_chats = [c for c in chats if c.telegram_chat_id < 0]
+    chat = next((c for c in group_chats if c.id == chat_id), group_chats[0] if group_chats else None)
+    if chat is None:
+        return result
+
+    end = now_utc()
+    start = end - timedelta(days=max(1, min(days, 365)))
+    items = await TopicRepository(session).items_in_period(chat.id, start, end)
+    open_items = [i for i in items if i.status == TopicItemStatus.open]
+
+    def of_kind(kind: TopicItemKind) -> list[dict[str, Any]]:
+        return [_item_view(i) for i in open_items if i.kind == kind]
+
+    tasks = await TaskRepository(session).get_active(chat.id)
+    pending, _ = await MessageRepository(session).pending_stats(chat.id)
+    last = await session.execute(
+        select(Digest)
+        .where(Digest.chat_id == chat.id, Digest.sent_at.isnot(None))
+        .order_by(Digest.sent_at.desc())
+        .limit(1)
+    )
+    digest = last.scalar_one_or_none()
+    result.update(
+        chat_id=chat.id,
+        decisions=of_kind(TopicItemKind.decision),
+        blockers=of_kind(TopicItemKind.blocker),
+        questions=of_kind(TopicItemKind.question),
+        tasks=[
+            {"id": t.id, "text": t.title, "owner": t.assignee_text, "deadline": t.deadline}
+            for t in tasks
+        ],
+        pending=pending,
+        digest={
+            "sent_at": ensure_aware_utc(digest.sent_at).isoformat(),
+            "text": plain_text(digest.text),
+        } if digest and digest.sent_at else None,
+    )
+    return result
+
+
+@app.post("/api/tasks/{task_id}/status", dependencies=[Depends(require_session)])
+async def set_task_status(
+    task_id: int, body: TaskStatusBody, session: AsyncSession = Depends(get_session)
+) -> dict[str, str]:
+    try:
+        status = TaskStatus(body.status)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Неизвестный статус.") from None
+    repo = TaskRepository(session)
+    task = await repo.get_by_id(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+    await repo.set_status(task, status)
+    return {"status": status.value}
+
+
+@app.post("/api/digest-preview", dependencies=[Depends(require_session)])
+async def digest_preview(
+    body: DigestPreviewBody, session: AsyncSession = Depends(get_session)
+) -> dict[str, str]:
+    """Build a digest to read here. Nothing is sent, and it is not kept."""
+    chat = await ChatRepository(session).get_by_id(body.chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Чат не найден.")
+    end = now_utc()
+    start = end - timedelta(days=max(1, min(body.days, 365)))
+    digest = await DigestService(session, _make_llm()).build_digest(chat, start, end)
+    text = plain_text(digest.text)
+    await session.rollback()
+    return {"text": text}
 
 
 @app.get("/api/overview", dependencies=[Depends(require_session)])
@@ -425,11 +553,69 @@ async def list_chats(session: AsyncSession = Depends(get_session)) -> dict[str, 
     waiting = [
         {"telegram_chat_id": int(chat_id), "title": info.get("title")}
         for chat_id, info in seen_chats.load().items()
-        if int(chat_id) not in allowed and int(chat_id) not in stored
+        if int(chat_id) not in allowed and int(chat_id) not in stored and info.get("present", True)
     ]
     # An allowed chat the bot has not heard from yet has no row, but must still be visible.
     pending = [{"telegram_chat_id": chat_id} for chat_id in sorted(allowed - stored)]
     return {"chats": views, "waiting": waiting, "allowed_without_messages": pending}
+
+
+async def _telegram(client: httpx.AsyncClient, method: str, **params: Any) -> dict[str, Any]:
+    base = settings.telegram_api_base or "https://api.telegram.org"
+    response = await client.get(f"{base}/bot{settings.bot_token}/{method}", params=params)
+    return response.json()
+
+
+async def _presence(
+    client: httpx.AsyncClient, bot_id: int, telegram_chat_id: int, title: str | None
+) -> dict[str, Any]:
+    member = await _telegram(client, "getChatMember", chat_id=telegram_chat_id, user_id=bot_id)
+    state = "out"
+    moved_to = None
+    if member.get("ok"):
+        if member["result"]["status"] in ("member", "administrator", "creator", "restricted"):
+            state = "in"
+            chat = await _telegram(client, "getChat", chat_id=telegram_chat_id)
+            title = chat.get("result", {}).get("title", title)
+    else:
+        # A group that became a supergroup gets a new id, and Telegram says which.
+        moved_to = member.get("parameters", {}).get("migrate_to_chat_id")
+        if moved_to:
+            state = "moved"
+    return {
+        "telegram_chat_id": telegram_chat_id,
+        "title": title,
+        "state": state,
+        "moved_to": moved_to,
+        "allowed": telegram_chat_id in settings.allowed_chats,
+    }
+
+
+@app.post("/api/chats/presence", dependencies=[Depends(require_session)])
+async def chat_presence(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """
+    Ask Telegram about every chat we have heard of. Telegram has no call that lists a bot's
+    chats, so this covers known ones; a new group appears once the bot sees it was added.
+    """
+    known: dict[int, str | None] = {int(k): v.get("title") for k, v in seen_chats.load().items()}
+    for chat in await ChatRepository(session).get_all_active():
+        if chat.telegram_chat_id < 0:
+            known.setdefault(chat.telegram_chat_id, chat.title)
+    for chat_id in settings.allowed_chats:
+        known.setdefault(chat_id, None)
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            me = await _telegram(client, "getMe")
+            if not me.get("ok"):
+                raise HTTPException(status_code=422, detail="Telegram не принял токен. Вставьте рабочий токен.")
+            bot = me["result"]
+            chats = [await _presence(client, bot["id"], i, t) for i, t in known.items()]
+    except (httpx.HTTPError, ValueError, KeyError) as e:
+        # Only the type: the request URL contains the token.
+        logger.warning("panel.presence_failed", error=type(e).__name__)
+        raise HTTPException(status_code=502, detail="Не удалось связаться с Telegram.") from None
+    return {"bot": bot.get("username"), "chats": chats}
 
 
 @app.post("/api/chats/access", dependencies=[Depends(require_session)])

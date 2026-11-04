@@ -6,25 +6,28 @@ import re
 import sqlite3
 import time
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import pytz
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import admin_panel as panel
 from app import polling, seen_chats
 from app.config import Settings, reload_settings, settings
+from app.db.models import Digest, TopicItem
 from app.db.models import Message as MessageRow
-from app.db.repositories import ChatRepository, MessageRepository
+from app.db.repositories import ChatRepository, DigestRepository, MessageRepository
 from app.db.session import get_session
 from app.env_file import read_env, update_env
 from tests.conftest import ALLOWED_CHAT
-from tests.helpers import feed
+from tests.helpers import ScriptedLLM, analyze, feed
 
 PASSWORD = "correct horse"
 ENV_TEXT = """# Telegram
@@ -95,7 +98,8 @@ def test_default_address_is_loopback_only():
         ("get", "/api/stacks"), ("post", "/api/stacks"), ("delete", "/api/stacks/x"),
         ("post", "/api/stacks/x/apply"), ("post", "/api/sandbox"), ("post", "/api/models/pull"),
         ("get", "/api/models/pull"), ("post", "/api/chats/access"), ("post", "/api/chats/1/purge"),
-        ("get", "/api/migration"), ("post", "/api/export"),
+        ("get", "/api/migration"), ("post", "/api/export"), ("get", "/api/summary"),
+        ("post", "/api/tasks/1/status"), ("post", "/api/digest-preview"), ("post", "/api/chats/presence"),
     ],
 )
 def test_every_endpoint_requires_a_session(client, method, path):
@@ -644,6 +648,288 @@ def test_clearing_a_test_chat_keeps_the_real_one(logged_in):
 
 def test_clearing_a_missing_chat(logged_in):
     assert logged_in.post("/api/chats/999/purge", json={"confirm": True}).status_code == 404
+
+
+# --- The summary page ---------------------------------------------------------
+
+
+def _group_with_content(client) -> int:
+    answer = {"topics": [{
+        "title": "Security Baseline", "summary": "Обсудили.", "message_ids": [1, 2, 3, 4],
+        "items": [
+            {"kind": "decision", "text": "Длина пароля 14", "source_ids": [1], "quote": "Решили: длина пароля 14"},
+            {"kind": "task", "text": "Подготовить GPO", "source_ids": [2], "owner": "Виктор", "deadline": "до пятницы"},
+            {"kind": "blocker", "text": "Падает API", "source_ids": [3]},
+            {"kind": "question", "text": "Кто согласует?", "source_ids": [4]},
+        ],
+    }]}
+
+    async def seed():
+        async with client.factory() as session:
+            chat = await ChatRepository(session).get_or_create(ALLOWED_CHAT, "Team")
+            await session.commit()
+            now = datetime.now(pytz.utc) - timedelta(hours=1)
+            await feed(session, chat, [
+                ("Аня", "Решили: длина пароля 14."), ("Аня", "Виктор, подготовь GPO до пятницы."),
+                ("Борис", "Падает API."), ("Борис", "Кто согласует?"),
+            ], start=now)
+            await analyze(session, chat, ScriptedLLM(answer))
+            return chat.id
+
+    return asyncio.run(seed())
+
+
+def test_summary_shows_what_people_came_for(logged_in):
+    chat_id = _group_with_content(logged_in)
+
+    data = logged_in.get("/api/summary").json()
+
+    assert data["chat_id"] == chat_id
+    assert [i["text"] for i in data["decisions"]] == ["Длина пароля 14"]
+    assert [i["text"] for i in data["blockers"]] == ["Падает API"]
+    assert [i["text"] for i in data["questions"]] == ["Кто согласует?"]
+    assert data["tasks"][0]["text"] == "Подготовить GPO"
+    assert data["tasks"][0]["owner"] == "Виктор"
+
+
+def test_summary_respects_the_period(logged_in):
+    _group_with_content(logged_in)
+
+    async def age_items():
+        async with logged_in.factory() as session:
+            await session.execute(update(TopicItem).values(occurred_at=datetime.now(pytz.utc) - timedelta(days=20)))
+            await session.commit()
+
+    asyncio.run(age_items())
+
+    assert logged_in.get("/api/summary?days=7").json()["decisions"] == []
+    assert len(logged_in.get("/api/summary?days=30").json()["decisions"]) == 1
+
+
+def test_summary_without_group_chats(logged_in):
+    data = logged_in.get("/api/summary").json()
+    assert data["chat_id"] is None and data["chats"] == []
+
+
+def test_summary_hides_private_chats(logged_in):
+    _chat(logged_in, 12345)
+    assert logged_in.get("/api/summary").json()["chats"] == []
+
+
+def test_summary_shows_the_last_sent_digest_as_text(logged_in):
+    chat_id = _chat(logged_in)
+
+    async def seed():
+        async with logged_in.factory() as session:
+            now = datetime.now(pytz.utc)
+            digest = await DigestRepository(session).create(chat_id, now, now, "<b>Отчёт</b> &amp; итоги")
+            digest.sent_at = now
+            await session.commit()
+
+    asyncio.run(seed())
+
+    assert logged_in.get("/api/summary").json()["digest"]["text"] == "Отчёт & итоги"
+
+
+@pytest.mark.parametrize(
+    "overrides, fragment",
+    [
+        ({"bot_token": "placeholder"}, "токен"),
+        ({"admin_user_ids": ""}, "Telegram ID"),
+        ({"allowed_chat_ids": ""}, "разрешите"),
+    ],
+)
+def test_setup_steps_name_what_is_missing(logged_in, monkeypatch, overrides, fragment):
+    monkeypatch.setattr(settings, "bot_token", "123:real")
+    for key, value in overrides.items():
+        monkeypatch.setattr(settings, key, value)
+
+    steps = logged_in.get("/api/summary").json()["setup"]
+
+    assert len(steps) == 1 and fragment in steps[0]
+
+
+def test_setup_step_for_a_paused_model(logged_in, monkeypatch):
+    monkeypatch.setattr(settings, "bot_token", "123:real")
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_base_url", "https://api.groq.com/openai/v1")
+
+    assert "модель" in logged_in.get("/api/summary").json()["setup"][0]
+
+
+def test_setup_step_for_a_model_not_downloaded(monkeypatch):
+    monkeypatch.setattr(settings, "bot_token", "123:real")
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_base_url", "http://localhost:11434/v1")
+    monkeypatch.setattr(settings, "openai_model", "gemma4:26b")
+
+    assert "Скачайте модель gemma4:26b" in panel._setup_steps(["gemma4:12b"])[0]
+    assert panel._setup_steps(["gemma4:26b"]) == []
+
+
+def test_no_setup_steps_when_ready(logged_in, monkeypatch):
+    monkeypatch.setattr(settings, "bot_token", "123:real")
+    assert logged_in.get("/api/summary").json()["setup"] == []
+
+
+def test_task_can_be_closed_from_the_summary(logged_in):
+    _group_with_content(logged_in)
+    task_id = logged_in.get("/api/summary").json()["tasks"][0]["id"]
+
+    assert logged_in.post(f"/api/tasks/{task_id}/status", json={"status": "done"}).json() == {"status": "done"}
+    assert logged_in.get("/api/summary").json()["tasks"] == []
+
+
+@pytest.mark.parametrize("task_id, status, code", [(999, "done", 404), (1, "exploded", 422)])
+def test_bad_task_updates(logged_in, task_id, status, code):
+    _group_with_content(logged_in)
+    assert logged_in.post(f"/api/tasks/{task_id}/status", json={"status": status}).status_code == code
+
+
+def test_digest_preview_is_not_sent_or_kept(logged_in, monkeypatch):
+    chat_id = _group_with_content(logged_in)
+    monkeypatch.setattr(panel, "_make_llm", lambda: ScriptedLLM({"topics": []}))
+
+    response = logged_in.post("/api/digest-preview", json={"chat_id": chat_id, "days": 7})
+
+    assert "Подготовить GPO" in response.json()["text"]
+    assert "<b>" not in response.json()["text"]
+
+    async def count():
+        async with logged_in.factory() as session:
+            return (await session.execute(select(func.count()).select_from(Digest))).scalar()
+
+    assert asyncio.run(count()) == 0
+
+
+def test_digest_preview_of_a_missing_chat(logged_in):
+    assert logged_in.post("/api/digest-preview", json={"chat_id": 999}).status_code == 404
+
+
+def test_only_a_few_settings_are_shown_up_front(logged_in):
+    basic = [f["key"] for f in logged_in.get("/api/settings").json()["fields"] if f["basic"]]
+    assert sorted(basic) == ["ADMIN_USER_IDS", "BOT_TOKEN"]
+
+
+def test_page_follows_the_stand_workflow():
+    page = (panel.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    steps = ["Сводка", "1. Настройка", "2. Проверка", "3. Перенос"]
+    assert page.count('data-tab="') == len(steps)
+    assert all(step in page for step in steps)
+
+
+# --- Where the bot is --------------------------------------------------------
+
+
+def _telegram_answers(monkeypatch, handler):
+    class Client(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(panel.httpx, "AsyncClient", Client)
+
+
+def _fake_telegram(members: dict):
+    """members maps a chat id to a getChatMember answer."""
+
+    def handler(request):
+        method = request.url.path.rsplit("/", 1)[-1]
+        if method == "getMe":
+            return httpx.Response(200, json={"ok": True, "result": {"id": 1, "username": "digest_todo_bot"}})
+        chat_id = int(request.url.params["chat_id"])
+        if method == "getChat":
+            return httpx.Response(200, json={"ok": True, "result": {"title": f"Свежее {chat_id}"}})
+        return httpx.Response(200, json=members[chat_id])
+
+    return handler
+
+
+def _status(value):
+    return {"ok": True, "result": {"status": value}}
+
+
+@pytest.mark.parametrize(
+    "answer, state",
+    [
+        (_status("member"), "in"),
+        (_status("administrator"), "in"),
+        (_status("left"), "out"),
+        (_status("kicked"), "out"),
+        ({"ok": False, "error_code": 400, "description": "chat not found"}, "out"),
+        ({"ok": False, "error_code": 403, "description": "bot was kicked"}, "out"),
+    ],
+)
+def test_presence_for_each_answer(logged_in, monkeypatch, answer, state):
+    seen_chats.remember(-555, "Группа", "supergroup")
+    monkeypatch.setattr(settings, "allowed_chat_ids", "")
+    _telegram_answers(monkeypatch, _fake_telegram({-555: answer}))
+
+    data = logged_in.post("/api/chats/presence").json()
+
+    assert data["bot"] == "digest_todo_bot"
+    assert [c["state"] for c in data["chats"]] == [state]
+
+
+def test_presence_reports_a_group_that_became_a_supergroup(logged_in, monkeypatch):
+    seen_chats.remember(-555, "Группа", "group")
+    monkeypatch.setattr(settings, "allowed_chat_ids", "")
+    answer = {"ok": False, "error_code": 400, "parameters": {"migrate_to_chat_id": -100777}}
+    _telegram_answers(monkeypatch, _fake_telegram({-555: answer}))
+
+    chat = logged_in.post("/api/chats/presence").json()["chats"][0]
+
+    assert (chat["state"], chat["moved_to"]) == ("moved", -100777)
+
+
+def test_presence_covers_every_chat_we_know(logged_in, monkeypatch):
+    _chat(logged_in, -222)
+    seen_chats.remember(-111, "Видели", "group")
+    monkeypatch.setattr(settings, "allowed_chat_ids", "-333")
+    _telegram_answers(monkeypatch, _fake_telegram({i: _status("member") for i in (-111, -222, -333)}))
+
+    chats = logged_in.post("/api/chats/presence").json()["chats"]
+
+    assert {c["telegram_chat_id"] for c in chats} == {-111, -222, -333}
+    assert {c["telegram_chat_id"]: c["allowed"] for c in chats}[-333] is True
+    assert chats[0]["title"].startswith("Свежее")
+
+
+def test_presence_leaves_out_private_chats(logged_in, monkeypatch):
+    _chat(logged_in, 12345)
+    monkeypatch.setattr(settings, "allowed_chat_ids", "")
+    _telegram_answers(monkeypatch, _fake_telegram({}))
+
+    assert logged_in.post("/api/chats/presence").json()["chats"] == []
+
+
+def test_presence_with_a_bad_token(logged_in, monkeypatch):
+    _telegram_answers(monkeypatch, lambda r: httpx.Response(200, json={"ok": False, "error_code": 401}))
+
+    response = logged_in.post("/api/chats/presence")
+
+    assert response.status_code == 422
+    assert "токен" in response.json()["detail"]
+
+
+def test_presence_failure_never_exposes_the_token(logged_in, monkeypatch):
+    monkeypatch.setattr(settings, "bot_token", "123456:SECRETSECRETSECRETSECRETSECRET12345")
+
+    def fail(request):
+        raise httpx.ConnectError(f"cannot reach {request.url}")
+
+    _telegram_answers(monkeypatch, fail)
+
+    response = logged_in.post("/api/chats/presence")
+
+    assert response.status_code == 502
+    assert "SECRETSECRET" not in response.text
+
+
+def test_removed_group_no_longer_waits(logged_in):
+    seen_chats.remember(-555, "Группа", "supergroup")
+    seen_chats.remember(-555, "Группа", "supergroup", present=False)
+
+    assert logged_in.get("/api/chats").json()["waiting"] == []
 
 
 # --- Moving to another hosting -----------------------------------------------
