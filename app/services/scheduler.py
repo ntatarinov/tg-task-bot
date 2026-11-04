@@ -1,25 +1,30 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
-import pytz
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.redis import cache_set_if_absent
-from app.db.repositories import ChatRepository, DigestRepository, MessageRepository
+from app.db.models import Chat
+from app.db.repositories import ChatRepository, DigestRepository
 from app.db.session import async_session_factory
-from app.llm.openai_client import create_llm_client
+from app.llm.base import BaseLLMClient, LLMUnavailableError
+from app.llm.openai_client import create_llm_client, llm_block_reason
+from app.services.analysis_runner import flush_pending, run_batch
 from app.services.digest_service import DigestService
-from app.services.task_analyzer import TaskAnalyzer
+from app.services.retention import RetentionService
 from app.utils import metrics
 from app.utils.logging import get_logger
-from app.utils.time import ensure_aware_utc
+from app.utils.time import chat_timezone, ensure_aware_utc, now_utc
 
 logger = get_logger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+_last_block_reason: str | None = None
 
 
 def _make_llm():
@@ -31,133 +36,150 @@ def _make_llm():
     )
 
 
-def chat_is_due(digest_time: str, now_local: datetime) -> bool:
-    """True when the chat's local HH:MM equals its configured digest_time."""
-    return now_local.strftime("%H:%M") == digest_time
+def due_slot(digest_time: str, now_local: datetime, catchup_hours: int = 0) -> date | None:
+    """
+    The day whose digest should go out now, if any: the latest occurrence of digest_time,
+    while it is within the catch-up window. A restart at 18:00 therefore delays the digest
+    instead of skipping the day, and a 23:00 slot can be caught up after midnight.
+    """
+    hour, minute = map(int, digest_time.split(":"))
+    slot = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if slot > now_local:
+        slot -= timedelta(days=1)
+    if now_local - slot < timedelta(hours=catchup_hours, minutes=1):
+        return slot.date()
+    return None
 
 
-async def _already_sent_today(
-    digest_repo: DigestRepository, chat_id: int, now_local: datetime, tz: pytz.BaseTzInfo
-) -> bool:
-    """Dedup guard: Redis SET NX claim, falling back to the digests table when Redis is down."""
-    key = f"digest:sent:{chat_id}:{now_local.date().isoformat()}"
-    acquired = await cache_set_if_absent(key, "1", ttl_seconds=36 * 3600)
-    if acquired is True:
-        return False
-    if acquired is False:
-        return True
-    # Redis unavailable — read the last sent digest from the database.
-    last_sent = await digest_repo.get_last_sent_at(chat_id)
-    if last_sent is None:
-        return False
-    return ensure_aware_utc(last_sent).astimezone(tz).date() == now_local.date()
+def weekly_key(day: date) -> str:
+    year, week, _ = day.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+async def _allowed_chat_ids(session: AsyncSession) -> list[int]:
+    """Ids rather than objects: a rollback after one chat's failure expires every loaded
+    object, so each chat has to be fetched afresh when its turn comes."""
+    chats = await ChatRepository(session).get_all_active()
+    return [c.id for c in chats if c.telegram_chat_id in settings.allowed_chats]
+
+
+async def run_scheduled_digest(
+    bot: Bot, session: AsyncSession, llm: BaseLLMClient, chat: Chat, kind: str, period_key: str
+) -> None:
+    """Build once per slot, then deliver until Telegram has accepted all of it."""
+    digest_repo = DigestRepository(session)
+    service = DigestService(session, llm)
+
+    digest = await digest_repo.get_slot(chat.id, kind, period_key)
+    if digest is not None and digest.sent_at is not None:
+        return
+
+    if digest is None:
+        await flush_pending(bot, session, llm, chat)
+        end = now_utc()
+        previous_end = await digest_repo.last_period_end(chat.id, kind)
+        fallback = end - timedelta(days=7 if kind == "weekly" else 1)
+        start = ensure_aware_utc(previous_end) if previous_end else fallback
+        try:
+            digest = await service.build_digest(chat, start, end, kind, period_key)
+            await session.commit()
+        except IntegrityError:
+            # Another process claimed this slot first.
+            await session.rollback()
+            return
+
+    target = chat.digest_chat_id or chat.telegram_chat_id
+    if await service.deliver(bot, digest, target):
+        metrics.digests_sent_total.inc()
+        logger.info("scheduler.digest_sent", chat_id=chat.id, kind=kind, period=period_key)
+    else:
+        logger.error("scheduler.digest_undelivered", chat_id=chat.id, kind=kind, period=period_key)
 
 
 async def digest_tick() -> None:
-    """Runs every minute; sends each chat's digest when its local time hits digest_time."""
+    """Runs every minute; sends each chat's digests once their local time has come."""
     from app.bot.dispatcher import get_bot
-    from app.bot.utils import safe_send_message
 
     bot = get_bot()
     if bot is None:
         return
 
     async with async_session_factory() as session:
-        chat_repo = ChatRepository(session)
-        digest_repo = DigestRepository(session)
         llm = _make_llm()
-        digest_svc = DigestService(session, llm)
-
+        chat_repo = ChatRepository(session)
         try:
-            chats = await chat_repo.get_all_active()
+            chat_ids = await _allowed_chat_ids(session)
         except Exception as e:
-            logger.error("scheduler.digest_tick.load_chats_failed", error=str(e))
+            logger.error("scheduler.digest_tick.load_chats_failed", error=type(e).__name__)
             return
 
-        for chat in chats:
-            if not chat.digest_enabled:
+        for chat_id in chat_ids:
+            chat = await chat_repo.get_by_id(chat_id)
+            if chat is None or not chat.digest_enabled:
                 continue
-            try:
-                tz = pytz.timezone(chat.timezone)
-            except Exception:
-                tz = pytz.timezone(settings.default_timezone)
-            now_local = datetime.now(tz)
-
-            if not chat_is_due(chat.digest_time, now_local):
-                continue
-            if await _already_sent_today(digest_repo, chat.id, now_local, tz):
+            now_local = datetime.now(chat_timezone(chat.timezone))
+            slot = due_slot(chat.digest_time, now_local, settings.digest_catchup_hours)
+            if slot is None:
                 continue
 
-            try:
-                text = await digest_svc.build_digest(chat)
-                await session.commit()
-            except Exception as e:
-                logger.error("scheduler.build_digest_failed", chat_id=chat.id, error=str(e))
-                await session.rollback()
-                continue
+            planned = [("daily", slot.isoformat())]
+            if chat.weekly_digest_enabled and slot.weekday() == chat.weekly_digest_day:
+                planned.append(("weekly", weekly_key(slot)))
 
-            sent = await safe_send_message(
-                bot,
-                chat_id=chat.telegram_chat_id,
-                text=text,
-                parse_mode="Markdown",
-            )
-            if sent is not None:
-                metrics.digests_sent_total.inc()
-                logger.info("scheduler.digest_sent", chat_id=chat.telegram_chat_id)
+            for kind, period_key in planned:
+                try:
+                    await run_scheduled_digest(bot, session, llm, chat, kind, period_key)
+                except Exception as e:
+                    logger.error(
+                        "scheduler.digest_failed", chat_id=chat_id, kind=kind, error=type(e).__name__
+                    )
+                    await session.rollback()
+                    break
 
 
-async def retry_pending_analysis() -> None:
-    """Re-run analysis for messages saved while the LLM was unavailable."""
+async def analysis_tick() -> None:
+    """Take one batch per chat. An outage just leaves messages queued for the next tick."""
     from app.bot.dispatcher import get_bot
-    from app.bot.utils import safe_send_message
-    from app.services.clarification_service import ClarificationService
+
+    global _last_block_reason
+    blocked = llm_block_reason()
+    if blocked != _last_block_reason:
+        _last_block_reason = blocked
+        if blocked:
+            logger.warning("analysis.paused", reason=blocked)
+    if blocked:
+        return
 
     async with async_session_factory() as session:
-        message_repo = MessageRepository(session)
-        try:
-            pending = await message_repo.get_pending_analysis()
-        except Exception as e:
-            logger.error("scheduler.retry.load_failed", error=str(e))
-            return
-
-        if not pending:
-            return
-
-        bot = get_bot()
         llm = _make_llm()
-        analyzer = TaskAnalyzer(session, llm)
-        logger.info("scheduler.retry.start", count=len(pending))
+        chat_repo = ChatRepository(session)
+        try:
+            chat_ids = await _allowed_chat_ids(session)
+        except Exception as e:
+            logger.error("scheduler.analysis.load_chats_failed", error=type(e).__name__)
+            return
 
-        for message in pending:
+        for chat_id in chat_ids:
             try:
-                to_ask = await analyzer.analyze_and_process(
-                    message=message,
-                    chat=message.chat,
-                    user=message.user,
-                )
-                await message_repo.mark_analysis_done(message.id)
-                await session.commit()
+                chat = await chat_repo.get_by_id(chat_id)
+                if chat is not None:
+                    await run_batch(get_bot(), session, llm, chat)
+            except LLMUnavailableError as e:
+                # Every chat uses the same model, so the others would fail the same way.
+                logger.warning("analysis.llm_unavailable", reason=str(e))
+                return
             except Exception as e:
-                logger.error("scheduler.retry.message_failed", message_id=message.id, error=str(e))
+                logger.error("analysis.failed", chat_id=chat_id, error=type(e).__name__)
                 await session.rollback()
-                continue
 
-            if to_ask and bot is not None:
-                sent = await safe_send_message(
-                    bot,
-                    chat_id=message.chat.telegram_chat_id,
-                    text=to_ask.question,
-                    reply_to_message_id=message.telegram_message_id,
-                )
-                if sent is not None:
-                    try:
-                        svc = ClarificationService(session)
-                        await svc.set_question_message_id(to_ask.clarification_id, sent.message_id)
-                        await session.commit()
-                    except Exception as e:
-                        logger.error("scheduler.retry.set_qmid_failed", error=str(e))
-                        await session.rollback()
+
+async def retention_tick() -> None:
+    async with async_session_factory() as session:
+        try:
+            await RetentionService(session).apply_policy()
+        except Exception as e:
+            logger.error("retention.failed", error=type(e).__name__)
+            await session.rollback()
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -173,9 +195,17 @@ def get_scheduler() -> AsyncIOScheduler:
             coalesce=True,
         )
         _scheduler.add_job(
-            retry_pending_analysis,
-            IntervalTrigger(seconds=settings.pending_retry_interval_seconds),
-            id="retry_pending_analysis",
+            analysis_tick,
+            IntervalTrigger(seconds=settings.analysis_interval_seconds),
+            id="analysis_tick",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        _scheduler.add_job(
+            retention_tick,
+            IntervalTrigger(hours=1),
+            id="retention_tick",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

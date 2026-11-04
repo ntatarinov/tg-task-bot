@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "tg-task-bot"
 version = "0.1.0"
 description = "Telegram bot for team chat task extraction and management"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "aiogram==3.13.1",
     "fastapi==0.115.5",
@@ -14,9 +14,10 @@ dependencies = [
     "sqlalchemy==2.0.36",
     "alembic==1.14.0",
     "asyncpg==0.30.0",
+    "psycopg2-binary==2.9.10",
     "redis==5.2.1",
     "apscheduler==3.10.4",
-    "pydantic==2.9.2",
+    "pydantic==2.10.3",
     "pydantic-settings==2.6.1",
     "httpx==0.28.1",
     "openai==1.57.4",
@@ -33,6 +34,8 @@ dev = [
     "pytest==8.3.4",
     "pytest-asyncio==0.24.0",
     "pytest-mock==3.14.0",
+    "pytest-cov==6.0.0",
+    "pyyaml==6.0.2",
     "ruff==0.8.4",
     "mypy==1.13.0",
     "types-pytz==2024.2.0.20241221",
@@ -40,8 +43,6 @@ dev = [
     "eval_type_backport==0.2.2",
 ]
 
-# Tell the build backend that the package lives in the "app" directory
-# (its name differs from the project name, so hatchling can't guess it).
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
@@ -62,6 +63,10 @@ ignore = ["E501"]
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
+
+[tool.coverage.run]
+# SQLAlchemy's async layer runs on greenlets; without this, lines after an await look unexecuted.
+concurrency = ["greenlet", "thread"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.utils.dates import normalize_deadline, parse_russian_deadline
+import pytest
+
+from app.utils.dates import normalize_deadline, parse_deadline, parse_russian_deadline
 
 # Anchor: Friday, 2026-06-26.
 TODAY = date(2026, 6, 26)
@@ -61,3 +63,59 @@ def test_normalize_no_phrase_means_no_deadline():
     # No date phrase in the message -> no deadline, even if the model invented one.
     assert normalize_deadline("надо добавить отчёт, Маша сделает", TODAY) is None
     assert normalize_deadline("просто обсуждаем", TODAY) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["пошли на завтрак", "среди прочего обсудили API", "купили 5 машин", "средняя нагрузка выросла",
+     "пятничный созыв", "2 марки серверов"],
+)
+def test_words_that_only_look_like_dates_are_not_deadlines(text):
+    """Regression: substring matching produced deadlines from all of these."""
+    assert parse_deadline(text, TODAY) is None
+
+
+def test_may_is_still_recognised():
+    assert parse_russian_deadline("к 5 мая", TODAY) == "2027-05-05"
+    assert parse_russian_deadline("к 3 марта", TODAY) == "2027-03-03"
+
+
+def test_more_russian_phrases():
+    assert parse_russian_deadline("через неделю", TODAY) == "2026-07-03"
+    assert parse_russian_deadline("до конца дня", TODAY) == "2026-06-26"
+    assert parse_russian_deadline("в воскресенье", TODAY) == "2026-06-28"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("by tomorrow", "2026-06-27"),
+        ("the day after tomorrow", "2026-06-28"),
+        ("by EOD", "2026-06-26"),
+        ("by Friday", "2026-07-03"),
+        ("on Monday", "2026-06-29"),
+        ("in 3 days", "2026-06-29"),
+        ("in 2 weeks", "2026-07-10"),
+        ("by the end of the week", "2026-07-03"),
+        ("end of month", "2026-06-30"),
+        ("by July 5", "2026-07-05"),
+        ("by 5th July", "2026-07-05"),
+        ("due Jan 10", "2027-01-10"),
+    ],
+)
+def test_english_deadlines(text, expected):
+    assert parse_deadline(text, TODAY) == expected
+
+
+def test_english_without_a_date():
+    assert parse_deadline("we should look into this", TODAY) is None
+
+
+def test_iso_date():
+    assert parse_deadline("дедлайн 2026-12-01", TODAY) == "2026-12-01"
+    assert parse_deadline("deadline 2026-13-01", TODAY) is None
+
+
+def test_invalid_calendar_dates_are_rejected():
+    assert parse_deadline("к 31 февраля", TODAY) is None
+    assert parse_deadline("к 45.13", TODAY) is None

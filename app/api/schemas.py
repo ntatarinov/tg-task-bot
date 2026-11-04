@@ -26,3 +26,7 @@ class ChatOut(BaseModel):
     digest_time: str
     is_active: bool
     active_tasks: int
+
+
+class TaskStatusUpdate(BaseModel):
+    status: str

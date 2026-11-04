@@ -1,0 +1,32 @@
+# The bot and the settings panel; the model is the cloud service configured in .env.
+# Needs LLM_EXTERNAL_ALLOWED=true, which sends chat content to that service.
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  environment: &app-env
+    DATABASE_URL: sqlite+aiosqlite:////data/bot.db
+    RESTART_FLAG_PATH: /data/restart.flag
+    STACKS_PATH: /data/stacks.json
+    SEEN_CHATS_PATH: /data/seen_chats.json
+    WEBHOOK_URL: ""
+  volumes:
+    - ./.env:/app/.env
+    - ./data:/data
+
+services:
+  bot:
+    <<: *app
+    command: sh -c "python -m app.init_db && python -m app.polling"
+
+  panel:
+    <<: *app
+    command: python -m app.admin_panel
+    environment:
+      <<: *app-env
+      PANEL_HOST: 0.0.0.0
+    ports:
+      # Loopback only. From your computer: ssh -L 8090:127.0.0.1:8090 user@server
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      - bot

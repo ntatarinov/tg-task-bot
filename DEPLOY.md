@@ -1,98 +1,152 @@
-# Деплой на VPS (24/7, polling + Groq)
+# Развёртывание Digest на сервере
 
-Бот работает в режиме **long polling** — публичный домен и HTTPS не нужны.
-Анализ — через **Groq** (бесплатный облачный LLM, OpenAI-совместимый).
-Нужен самый дешёвый VPS (хватит **1 ГБ RAM**), потому что тяжёлую модель считает Groq, а не сервер.
+Digest — Telegram-бот, который разбирает рабочие чаты и присылает дайджесты. Инструкция описывает
+установку на Linux-сервер из готового архива.
 
-> ⚠️ Приватность: при Groq сообщения чата уходят в облако провайдера для анализа.
-> Для рабочей переписки убедись, что это допустимо (иначе — вариант с локальной Ollama на своём сервере).
+## Что будет работать
 
----
+| Контейнер | Назначение | Порты |
+|---|---|---|
+| `bot` | Получает сообщения (long polling), анализ, отчёты | Только исходящие |
+| `ollama` | Локальная ИИ-модель | Только внутри сети Docker |
+| `panel` | Панель управления | `127.0.0.1:8090` |
+| `model-pull` | Скачивает модель и завершается | — |
 
-## Шаг 0. Ключ Groq (бесплатно, 2 минуты)
-1. Зайди на **https://console.groq.com** → зарегистрируйся.
-2. **API Keys** → **Create API Key** → скопируй ключ (`gsk_...`).
+База SQLite лежит в `./data`, настройки в `./.env`. Postgres и Redis не нужны.
 
-## Шаг 1. VPS
-Любой провайдер (Hetzner, Timeweb, DigitalOcean, Aeza…). Бери **Ubuntu 22.04/24.04, 1 ГБ RAM**.
-Запиши IP и root-пароль, зайди по SSH:
-```bash
-ssh root@ТВОЙ_IP
-```
+## Требования
 
-## Шаг 2. Docker
-```bash
-curl -fsSL https://get.docker.com | sh
-```
+| | Минимум |
+|---|---|
+| ОС | Linux x86_64 с `sh`, `curl`, `unzip` |
+| ОЗУ | 32 ГБ, рекомендуется 64 ГБ |
+| Диск | 50 ГБ |
+| Процессор | 8 потоков |
+| Видеокарта | Не обязательна. С NVIDIA нужен NVIDIA Container Toolkit, `install.sh` найдёт её сам |
 
-## Шаг 3. Залить проект на сервер
-С **локального** Mac (из корня проекта), без мусора:
-```bash
-rsync -av --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
-      --exclude '.mypy_cache' --exclude 'bot.db' --exclude '.env' \
-      /Users/whooch/tg-task-bot/  root@ТВОЙ_IP:/opt/tg-task-bot/
-```
-(Или через git, если заведёшь репозиторий. `.env` НЕ копируем — создадим на сервере.)
+**Сеть.** Входящие порты не нужны, кроме SSH. Исходящий доступ по 443 нужен к `api.telegram.org`
+постоянно, а к Docker Hub, `pypi.org` и `registry.ollama.ai` на время установки.
 
-## Шаг 4. Настроить .env на сервере
-```bash
-cd /opt/tg-task-bot
-cp .env.example .env
-nano .env
-```
-Заполни минимум:
-```
-BOT_TOKEN=123456789:ABC...   # токен бота от @BotFather
-WEBHOOK_URL=                 # пусто (polling)
-LLM_PROVIDER=openai
-OPENAI_API_KEY=gsk_...       # ключ Groq из шага 0
-OPENAI_MODEL=llama-3.3-70b-versatile
-OPENAI_BASE_URL=https://api.groq.com/openai/v1
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/tg_task_bot
-REDIS_URL=redis://redis:6379/0
-DEFAULT_TIMEZONE=Asia/Almaty
-DEFAULT_DIGEST_TIME=18:00
-```
-(Сохранить в nano: `Ctrl+O`, `Enter`, `Ctrl+X`.)
+## Установка
 
-## Шаг 5. Запуск + миграции
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml run --rm bot alembic upgrade head
-```
+Вы получите архив `digest-bot-<дата>.zip`. **В нём токен бота и вся сохранённая переписка.** Передавайте его
+только по защищённому каналу и удалите после установки.
 
-## Шаг 6. Проверить, что бот живой
-```bash
-docker compose -f docker-compose.prod.yml logs -f bot
-```
-Ждём строку: `Run polling for bot @im_tudushka_bot`. Теперь пиши в чат — бот работает 24/7.
-
----
-
-## Управление
+1. Остановите бота на прежнем компьютере: с одним токеном могут работать только один экземпляр.
+2. Установите:
 
 ```bash
-# логи
-docker compose -f docker-compose.prod.yml logs -f bot
-
-# перезапуск / остановка
-docker compose -f docker-compose.prod.yml restart bot
-docker compose -f docker-compose.prod.yml down          # остановить всё (данные в volume сохранятся)
-
-# обновить после изменений кода (заново rsync, затем):
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml run --rm bot alembic upgrade head   # если были новые миграции
-
-# бэкап базы
-docker compose -f docker-compose.prod.yml exec postgres pg_dump -U postgres tg_task_bot > backup.sql
+unzip digest-bot-*.zip -d digest-bot && cd digest-bot
+sh install.sh
 ```
 
----
+Скрипт ставит Docker, если его нет, выставляет права `600` на `.env`, создаёт пароль панели и выводит его,
+скачивает модель, обновляет базу и запускает проверку. Первый запуск занимает несколько минут.
 
-## Заметки
-- **Порты наружу не открываются** — Postgres/Redis доступны только внутри docker-сети, бот ходит только исходящими (Telegram + Groq). Дополнительный firewall не обязателен, но не помешает (`ufw allow OpenSSH`).
-- **Автоперезапуск:** `restart: unless-stopped` — контейнеры сами поднимутся после ребута сервера/падения.
-- **Смена модели Groq:** если `llama-3.3-70b-versatile` окажется медленной/недоступной — попробуй `llama-3.1-8b-instant` (быстрее, чуть проще). Актуальный список — в консоли Groq.
-- **Приватность важнее облака?** Тогда вместо Groq — Ollama на этом же (более мощном, ≥16 ГБ RAM) сервере: в `.env` укажи `OPENAI_BASE_URL=http://ollama:11434/v1`, `OPENAI_MODEL=qwen2.5:7b`, `OPENAI_API_KEY=ollama` и добавь сервис `ollama` в compose.
-- **Даты** считаются детерминированно на стороне бота (не зависят от модели), так что смена LLM их не ломает.
-- **Ноут больше не нужен** — можно закрывать. Локальный бот (Ollama) и серверный не конфликтуют только если запущен ОДИН: перед деплоем останови локальный `pkill -f app.polling`, иначе два процесса будут драться за getUpdates.
+Другой вариант: `sh install.sh cloud` запускает бота без локальной модели. Модель тогда берётся из настроек
+`.env`, это внешний сервис, и нужен `LLM_EXTERNAL_ALLOWED=true` с разрешения владельца данных.
+
+3. Убедитесь, что проверка в конце показала «Всё готово к работе». Повторить её можно так:
+
+```bash
+docker compose -f docker-compose.selfhost.yml exec bot python -m app.doctor
+```
+
+## Панель управления
+
+Панель открыта только на `127.0.0.1` сервера. **Не публикуйте порт 8090 и не ставьте его за внешний прокси:**
+панель меняет токены и настройки. С рабочего компьютера подключайтесь через SSH-туннель:
+
+```bash
+ssh -L 8090:127.0.0.1:8090 <пользователь>@<сервер>
+```
+
+Затем откройте http://localhost:8090. Пароль лежит в `.env`, в строке `ADMIN_PANEL_PASSWORD`.
+
+В панели можно проверить систему и модель на тестовой переписке, переключить вариант модели, изменить настройки,
+разрешить и запретить чаты, перезапустить бота. Бот перезапускается сам: панель создаёт файл-флаг, бот завершается,
+а Docker поднимает его снова. Доступа к Docker у панели нет.
+
+## Обслуживание
+
+Команды ниже даны для `docker-compose.selfhost.yml`. С видеокартой добавляйте `-f docker-compose.gpu.yml`.
+
+```bash
+# Логи и состояние
+docker compose -f docker-compose.selfhost.yml logs -f bot
+docker compose -f docker-compose.selfhost.yml ps
+
+# Остановка и запуск
+docker compose -f docker-compose.selfhost.yml down
+docker compose -f docker-compose.selfhost.yml up -d
+```
+
+В логах нет текста сообщений и токенов. Контейнеры сами поднимаются после перезагрузки сервера.
+
+### Резервная копия
+
+Сохраняйте `data/backup.db` и `.env` в защищённое место. В них переписка и токены.
+
+```bash
+docker compose -f docker-compose.selfhost.yml exec -T bot python -c "import sqlite3; s=sqlite3.connect('/data/bot.db'); d=sqlite3.connect('/data/backup.db'); s.backup(d); d.close()"
+```
+
+Команда безопасна для работающего бота. Копирование файла `bot.db` напрямую использовать нельзя: часть данных
+лежит в `bot.db-wal`.
+
+### Восстановление
+
+```bash
+docker compose -f docker-compose.selfhost.yml down
+rm -f data/bot.db-wal data/bot.db-shm
+cp <копия> data/bot.db
+docker compose -f docker-compose.selfhost.yml up -d
+```
+
+### Обновление
+
+Соберите архив без данных (`python -m app.bundle --code-only`), распакуйте поверх текущей папки и запустите
+установку. `.env` и `data/` при этом не меняются.
+
+```bash
+unzip -o digest-bot-*.zip -d digest-bot && cd digest-bot
+sh install.sh
+```
+
+Если схема базы меняется, перед обновлением автоматически создаётся `data/bot.db.bak-<дата>`.
+Такие копии содержат переписку и не удаляются сами: уберите их, когда обновление подтвердится.
+
+**Откат:** распакуйте предыдущий архив, восстановите базу из копии и запустите `sh install.sh`.
+
+### Переезд на другой хостинг
+
+Вкладка «Перенос» в панели скачивает архив с кодом, настройками и данными, для этого нужно снова ввести пароль.
+Остановите бота на старом сервере и установите архив на новом так же, как при первой установке.
+
+### Смена модели
+
+Удобнее всего через панель: вкладка «Проверка» покажет результат на тестовой переписке, «Стек» применит вариант и
+скачает модель. Полная проверка качества на синтетических сценариях:
+
+```bash
+docker compose -f docker-compose.selfhost.yml exec bot python scripts/eval_llm.py --model <имя> --pause 0 --large 3
+```
+
+Для моделей с рассуждениями, таких как `gemma4`, оставляйте `LLM_REASONING_EFFORT=none`.
+
+## Безопасность
+
+- Переписка не покидает сервер: модель работает локально. Сервер принадлежит хостеру, поэтому его выбор нужно согласовать с владельцем данных.
+- Срок хранения задаётся в панели, по умолчанию данные хранятся бессрочно.
+- Бот работает только в чатах из `ALLOWED_CHAT_IDS`.
+- Пароль панели длинный и случайный. Сменить его можно в `.env`, после чего выполнить `docker compose -f docker-compose.selfhost.yml up -d --force-recreate panel`.
+
+## Что не проверялось
+
+На момент подготовки инструкции Docker на машине разработки был выключен, поэтому первая установка может потребовать правок:
+
+- Образ не собирался целиком, контейнеры не запускались. Проверены формат compose-файлов, синтаксис `install.sh`, шаг `pip install` и запуск бота и панели без Docker.
+- Работа с настоящим Telegram не проверялась.
+- Скорость модели измерена на настольном ПК с видеокартой на 8 ГБ. На сервере без видеокарты она будет ниже, один пакет может занимать несколько минут.
+
+`docker-compose.yml` и `docker-compose.prod.yml` с Postgres относятся к прежней схеме развёртывания и не проверялись. Используйте варианты из этой инструкции.

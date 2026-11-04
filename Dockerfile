@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+COPY app ./app
 RUN pip install --upgrade pip && pip install -e .
 
 COPY . .

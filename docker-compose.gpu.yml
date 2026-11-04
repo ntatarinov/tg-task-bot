@@ -1,0 +1,11 @@
+# Added on top of docker-compose.selfhost.yml by install.sh when an NVIDIA GPU is present.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

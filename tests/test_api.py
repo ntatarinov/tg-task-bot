@@ -3,9 +3,17 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.api.routes import dashboard, list_chat_tasks, list_chats
+from app.api.routes import (
+    chat_dashboard,
+    dashboard,
+    list_chat_tasks,
+    list_chats,
+    update_task_status,
+)
+from app.api.schemas import TaskStatusUpdate
 from app.db.models import TaskStatus
 from app.db.repositories import ChatRepository, TaskRepository
+from app.utils.dashboard_auth import make_chat_token
 
 
 @pytest.mark.asyncio
@@ -58,3 +66,97 @@ async def test_dashboard_renders_task_title(session):
     html = resp.body.decode("utf-8")
     assert "Squad" in html
     assert "Починить деплой" in html
+
+
+@pytest.mark.asyncio
+async def test_endpoints_open_when_secret_unset(session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_secret", "")
+    chat_repo = ChatRepository(session)
+    chat = await chat_repo.get_or_create(telegram_chat_id=-400)
+    await session.commit()
+
+    # No token supplied, but DASHBOARD_SECRET is empty -> allowed (dev default).
+    await list_chats(session=session)
+    await list_chat_tasks(chat.id, status=None, session=session)
+
+
+@pytest.mark.asyncio
+async def test_endpoints_require_token_when_secret_set(session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_secret", "s3cret")
+    chat_repo = ChatRepository(session)
+    chat = await chat_repo.get_or_create(telegram_chat_id=-500)
+    await session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await chat_dashboard(chat.id, token="", session=session)
+    assert exc.value.status_code == 403
+
+    with pytest.raises(HTTPException) as exc:
+        await chat_dashboard(chat.id, token="wrong", session=session)
+    assert exc.value.status_code == 403
+
+    resp = await chat_dashboard(chat.id, token=make_chat_token(chat.id), session=session)
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_changes_task(session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_secret", "s3cret")
+    chat_repo = ChatRepository(session)
+    task_repo = TaskRepository(session)
+    chat = await chat_repo.get_or_create(telegram_chat_id=-600)
+    task = await task_repo.create(chat_id=chat.id, title="Deploy", status=TaskStatus.new)
+    await session.commit()
+
+    token = make_chat_token(chat.id)
+    out = await update_task_status(
+        chat.id, task.id, TaskStatusUpdate(status="done"), token=token, session=session
+    )
+    assert out.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_rejects_wrong_chat_token(session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_secret", "s3cret")
+    chat_repo = ChatRepository(session)
+    task_repo = TaskRepository(session)
+    chat_a = await chat_repo.get_or_create(telegram_chat_id=-700)
+    chat_b = await chat_repo.get_or_create(telegram_chat_id=-701)
+    task = await task_repo.create(chat_id=chat_a.id, title="Deploy", status=TaskStatus.new)
+    await session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await update_task_status(
+            chat_a.id,
+            task.id,
+            TaskStatusUpdate(status="done"),
+            token=make_chat_token(chat_b.id),
+            session=session,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_rejects_invalid_status(session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_secret", "")
+    chat_repo = ChatRepository(session)
+    task_repo = TaskRepository(session)
+    chat = await chat_repo.get_or_create(telegram_chat_id=-800)
+    task = await task_repo.create(chat_id=chat.id, title="Deploy", status=TaskStatus.new)
+    await session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await update_task_status(
+            chat.id, task.id, TaskStatusUpdate(status="not_a_status"), token="", session=session
+        )
+    assert exc.value.status_code == 400

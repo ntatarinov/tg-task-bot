@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digest: управление</title>
+<link rel="stylesheet" href="/static/panel.css">
+</head>
+<body>
+<section id="login" class="login" hidden>
+  <form id="login-form" class="login-card">
+    <h1>Digest</h1>
+    <p>Управление ботом</p>
+    <label for="password">Пароль</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button type="submit" class="primary">Войти</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <header class="top">
+    <strong class="brand">Digest</strong>
+    <nav id="tabs" aria-label="Разделы">
+      <button type="button" data-tab="overview">Обзор</button>
+      <button type="button" data-tab="sandbox">Проверка</button>
+      <button type="button" data-tab="stacks">Стек</button>
+      <button type="button" data-tab="settings">Настройки</button>
+      <button type="button" data-tab="chats">Чаты</button>
+      <button type="button" data-tab="move">Перенос</button>
+    </nav>
+    <button type="button" id="logout" class="quiet">Выйти</button>
+  </header>
+
+  <div id="restart-bar" class="restart-bar" hidden>
+    <span id="restart-text"></span>
+    <button type="button" id="restart" class="primary">Перезапустить бота</button>
+  </div>
+
+  <main>
+    <section id="tab-overview" hidden>
+      <div id="summary" class="summary"></div>
+      <div class="section-head">
+        <h2>Проверка системы</h2>
+        <button type="button" id="check" class="primary">Проверить</button>
+      </div>
+      <ul id="check-results" class="checks"></ul>
+    </section>
+
+    <section id="tab-sandbox" hidden>
+      <h2>Проверка на тестовой переписке</h2>
+      <p class="hint">Бот, Telegram и рабочая база здесь не участвуют. Запускайте разные варианты и сравнивайте результаты.</p>
+      <div class="field">
+        <label for="sandbox-stack">Вариант</label>
+        <select id="sandbox-stack"></select>
+      </div>
+      <div class="field">
+        <label for="sandbox-text">Переписка</label>
+        <textarea id="sandbox-text" rows="11" spellcheck="false"></textarea>
+        <small>Каждое сообщение с новой строки в виде «Автор: текст».</small>
+      </div>
+      <div id="sandbox-confirm" class="confirm" hidden>
+        <input id="sandbox-confirm-box" type="checkbox">
+        <label for="sandbox-confirm-box">Это внешний сервис. Подтверждаю, что в тексте нет рабочих данных.</label>
+      </div>
+      <div class="save-row">
+        <button type="button" id="sandbox-run" class="primary">Запустить</button>
+        <span id="sandbox-status" role="status"></span>
+      </div>
+      <div id="sandbox-results" class="results"></div>
+    </section>
+
+    <section id="tab-stacks" hidden>
+      <h2>Стек</h2>
+      <p class="hint">Вариант определяет, какая модель работает и где. Проверьте его на вкладке «Проверка», затем примените.</p>
+      <div id="stacks" class="chats"></div>
+      <h2>Добавить свой вариант</h2>
+      <p class="hint">Подходит любой сервис с API, совместимым с OpenAI.</p>
+      <form id="stack-form" class="grid2" novalidate>
+        <div class="field"><label for="s-name">Название</label><input id="s-name"><p id="se-name" class="error"></p></div>
+        <div class="field"><label for="s-base_url">Адрес</label><input id="s-base_url" placeholder="https://…/v1"><p id="se-base_url" class="error"></p></div>
+        <div class="field"><label for="s-model">Модель</label><input id="s-model"><p id="se-model" class="error"></p></div>
+        <div class="field"><label for="s-api_key">Ключ API</label><input id="s-api_key" type="password" autocomplete="off"><p id="se-api_key" class="error"></p></div>
+        <div class="field"><label for="s-reasoning_effort">Рассуждения</label>
+          <select id="s-reasoning_effort"><option value="">не задано</option><option>none</option><option>low</option><option>medium</option><option>high</option></select>
+          <p id="se-reasoning_effort" class="error"></p></div>
+        <div class="field"><label for="s-max_output_tokens">Предел длины ответа</label><input id="s-max_output_tokens" value="2500"><p id="se-max_output_tokens" class="error"></p></div>
+        <div class="field"><label for="s-timeout_seconds">Таймаут, секунд</label><input id="s-timeout_seconds" value="60"><p id="se-timeout_seconds" class="error"></p></div>
+        <div class="save-row"><button type="submit" class="primary">Добавить</button><span id="stack-status" role="status"></span></div>
+      </form>
+      <h2>Скачать модель в Ollama</h2>
+      <div id="models-installed" class="hint"></div>
+      <form id="pull-form" class="save-row">
+        <input id="pull-model" placeholder="gemma4:26b" aria-label="Имя модели">
+        <button type="submit">Скачать</button>
+        <span id="pull-status" role="status"></span>
+      </form>
+    </section>
+
+    <section id="tab-settings" hidden>
+      <h2>Настройки</h2>
+      <p class="hint">Изменения вступают в силу после сохранения и перезапуска бота.</p>
+      <form id="settings-form" novalidate>
+        <div id="fields"></div>
+        <div class="save-row">
+          <button type="submit" class="primary">Сохранить</button>
+          <span id="save-status" role="status"></span>
+        </div>
+      </form>
+    </section>
+
+    <section id="tab-move" hidden>
+      <h2>Перенос на другой хостинг</h2>
+      <div id="move-summary" class="summary"></div>
+      <p id="move-warning" class="error" hidden>База работает не на SQLite и в архив не войдёт. Перенесите её средствами вашей базы.</p>
+      <ol class="steps">
+        <li>
+          <strong>Скачайте архив.</strong> В нём код, настройки и данные.
+          <form id="export-form" class="save-row">
+            <input id="export-password" type="password" autocomplete="current-password" aria-label="Пароль панели" placeholder="Пароль панели" required>
+            <button type="submit" class="primary">Скачать архив</button>
+            <span id="export-status" role="status"></span>
+          </form>
+          <small>В архиве токены и вся переписка. Передавайте его только по защищённому каналу и удалите после установки.</small>
+        </li>
+        <li>
+          <strong>Остановите бота здесь.</strong> С одним токеном может работать только один экземпляр.
+        </li>
+        <li>
+          <strong>Установите на новом сервере</strong> (Linux, от 32 ГБ ОЗУ для локальной модели):
+          <pre>unzip digest-bot-*.zip -d digest-bot
+cd digest-bot
+sh install.sh</pre>
+          <small>Если модель работает в облаке, запустите <code>sh install.sh cloud</code>: тогда хватит небольшого сервера.</small>
+        </li>
+        <li>
+          <strong>Откройте панель на новом сервере</strong> через SSH-туннель и нажмите «Проверить» на вкладке «Обзор»:
+          <pre>ssh -L 8090:127.0.0.1:8090 пользователь@сервер</pre>
+          <small>Затем http://localhost:8090. Пароль тот же, он лежит в файле .env.</small>
+        </li>
+      </ol>
+    </section>
+
+    <section id="tab-chats" hidden>
+      <h2>Чаты</h2>
+      <p class="hint">Добавьте бота в группу и напишите там любое сообщение: она появится здесь. Разрешённых чатов может быть несколько, например тестовый и рабочий.</p>
+      <div id="waiting" class="chats"></div>
+      <div id="chats" class="chats"></div>
+    </section>
+  </main>
+</div>
+<script src="/static/panel.js"></script>
+</body>
+</html>

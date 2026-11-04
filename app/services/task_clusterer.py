@@ -1,28 +1,30 @@
 from __future__ import annotations
 
+import re
 from difflib import SequenceMatcher
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Message, Task, TaskPriority, TaskStatus
+from app.db.models import Chat, Task, TaskPriority, TaskStatus
 from app.db.repositories import TaskMessageRepository, TaskRepository
-from app.llm.schemas import MessageAnalysis
 from app.utils import metrics
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-SIMILARITY_THRESHOLD = 0.6
-PRIORITY_MAP: dict[str, TaskPriority] = {
-    "low": TaskPriority.low,
-    "medium": TaskPriority.medium,
-    "high": TaskPriority.high,
-    "critical": TaskPriority.critical,
-}
+# Only near-identical wording counts as the same task. At the old 0.6, "Интеграция
+# API оплаты" and "Интеграция API доставки" (0.77) collapsed into one.
+SIMILARITY_THRESHOLD = 0.9
 
 
-def _similarity(a: str, b: str) -> float:
+def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def same_wording(a: str, b: str, threshold: float) -> bool:
+    """Near-identical text with the same numbers. The numbers are usually the whole
+    point: "релиз 10 ноября" and "релиз 17 ноября" differ by one character."""
+    return re.findall(r"\d+", a) == re.findall(r"\d+", b) and similarity(a, b) >= threshold
 
 
 class TaskClusterer:
@@ -33,72 +35,46 @@ class TaskClusterer:
 
     async def find_or_create_task(
         self,
-        message: Message,
         chat: Chat,
-        analysis: MessageAnalysis,
-        active_tasks: list[Task],
+        title: str,
+        message_ids: list[int],
+        assignee: str | None = None,
+        deadline: str | None = None,
         reporter_text: str | None = None,
-    ) -> Task | None:
-        task: Task | None = None
-
-        # 1. Check if reply links to an existing task
-        if message.reply_to_message_id:
-            task = await self.task_msg_repo.get_task_for_reply(chat.id, message.reply_to_message_id)
-            if task:
-                logger.info("clusterer.linked_via_reply", task_id=task.id)
-
-        # 2. LLM-provided related_task_id
-        if not task and analysis.related_task_id:
-            task = await self.task_repo.get_by_id(analysis.related_task_id)
-            if task and task.chat_id != chat.id:
-                task = None
-
-        # 3. Title similarity with active tasks
-        if not task and analysis.task_title and active_tasks:
-            for active in active_tasks:
-                score = _similarity(analysis.task_title, active.title)
-                if score >= SIMILARITY_THRESHOLD:
-                    task = active
-                    logger.info("clusterer.linked_via_similarity", task_id=task.id, score=score)
-                    break
+    ) -> tuple[Task, bool]:
+        """Returns (task, created) — `created` is True only when a new row was inserted,
+        so callers can tell a fresh task apart from one that was merely updated."""
+        active_tasks = await self.task_repo.get_active(chat.id)
+        task = next(
+            (t for t in active_tasks if same_wording(title, t.title, SIMILARITY_THRESHOLD)), None
+        )
 
         if task:
-            # Update existing task with new info
             updates: dict = {}
-            if analysis.summary and not task.description:
-                updates["description"] = analysis.summary
-            if analysis.assignee and not task.assignee_text:
-                updates["assignee_text"] = analysis.assignee
-            if analysis.deadline and not task.deadline:
-                updates["deadline"] = analysis.deadline
+            if assignee and not task.assignee_text:
+                updates["assignee_text"] = assignee
+            if deadline and not task.deadline:
+                updates["deadline"] = deadline
             if updates:
                 await self.task_repo.update(task, **updates)
-            await self.task_msg_repo.link(task.id, message.id)
-            return task
+            logger.info("clusterer.linked_via_similarity", task_id=task.id)
+            created = False
+        else:
+            task = await self.task_repo.create(
+                chat_id=chat.id,
+                title=title[:500],
+                description=title,
+                assignee_text=assignee,
+                reporter_text=reporter_text,
+                status=TaskStatus.new,
+                priority=TaskPriority.medium,
+                deadline=deadline,
+                source="llm",
+            )
+            metrics.tasks_created_total.inc()
+            logger.info("clusterer.task_created", task_id=task.id)
+            created = True
 
-        # 4. Create new task
-        if not analysis.task_title:
-            return None
-
-        priority = PRIORITY_MAP.get(analysis.priority, TaskPriority.medium)
-        requirements_text = "\n".join(f"- {r}" for r in analysis.requirements) if analysis.requirements else None
-        open_questions_text = "\n".join(f"- {q}" for q in analysis.open_questions) if analysis.open_questions else None
-
-        task = await self.task_repo.create(
-            chat_id=chat.id,
-            title=analysis.task_title,
-            description=analysis.summary,
-            assignee_text=analysis.assignee,
-            reporter_text=reporter_text,
-            status=TaskStatus.new,
-            priority=priority,
-            deadline=analysis.deadline,
-            confidence=analysis.confidence,
-            source="llm",
-            requirements=requirements_text,
-            open_questions=open_questions_text,
-        )
-        await self.task_msg_repo.link(task.id, message.id)
-        metrics.tasks_created_total.inc()
-        logger.info("clusterer.task_created", task_id=task.id, title=task.title)
-        return task
+        for message_id in message_ids:
+            await self.task_msg_repo.link(task.id, message_id)
+        return task, created

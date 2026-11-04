@@ -1,18 +1,9 @@
-# Secrets — NEVER commit (contains the live bot token, Groq key, etc.)
 .env
 .env.*
 !.env.example
-
-# Local database — NEVER commit (real chat messages of colleagues + tasks)
-bot.db
-*.db
-*.sqlite
-*.sqlite3
-
-# Runtime logs
-*.log
-
-# Python
+restart.flag
+stacks.json
+seen_chats.json
 __pycache__/
 *.pyc
 *.pyo
@@ -27,5 +18,13 @@ build/
 .coverage
 htmlcov/
 
-# macOS
-.DS_Store
+# Corporate chat data and anything derived from it
+*.db
+*.db-wal
+*.db-shm
+*.db.bak-*
+*.log
+result.json
+.backup/
+data/
+digest-bot-*.zip

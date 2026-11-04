@@ -61,19 +61,6 @@ async def cache_set(key: str, value: str, ttl_seconds: int) -> bool:
         return False
 
 
-async def cache_set_if_absent(key: str, value: str, ttl_seconds: int) -> bool | None:
-    """SET NX EX. True if we acquired the key, False if it already existed, None if Redis is down."""
-    client = get_redis()
-    if client is None:
-        return None
-    try:
-        acquired = await client.set(key, value, ex=ttl_seconds, nx=True)
-        return bool(acquired)
-    except Exception as e:
-        _note_unavailable(str(e))
-        return None
-
-
 async def close_redis() -> None:
     global _client
     if _client is not None:

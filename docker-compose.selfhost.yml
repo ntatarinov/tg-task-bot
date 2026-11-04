@@ -1,0 +1,70 @@
+# The bot, its model and the settings panel on one server: chat content never goes to an
+# AI service. SQLite lives in ./data, so no Postgres or Redis is needed. Start it with install.sh.
+#
+# .env is mounted rather than passed with env_file, which is read only when a container is
+# created: otherwise settings saved in the panel would be ignored after a restart. Which
+# model runs stays in .env so the panel can swap it; `environment` only holds this layout.
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  environment: &app-env
+    LOCAL_LLM_URL: http://ollama:11434/v1
+    DATABASE_URL: sqlite+aiosqlite:////data/bot.db
+    RESTART_FLAG_PATH: /data/restart.flag
+    STACKS_PATH: /data/stacks.json
+    SEEN_CHATS_PATH: /data/seen_chats.json
+    WEBHOOK_URL: ""
+  volumes:
+    - ./.env:/app/.env
+    - ./data:/data
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # Ollama's default of about 4K tokens would silently cut off a batch.
+      OLLAMA_CONTEXT_LENGTH: "12288"
+      # Keep the model in memory; reloading it takes longer than a whole batch.
+      OLLAMA_KEEP_ALIVE: "-1"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Downloads the model once, then exits. A cloud model (name with a slash) needs nothing.
+  model-pull:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: ollama:11434
+      MODEL: ${OPENAI_MODEL:?set OPENAI_MODEL in .env}
+    entrypoint: ["sh", "-c", 'case "$$MODEL" in */*) echo "cloud model, nothing to pull" ;; *) ollama pull "$$MODEL" ;; esac']
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  bot:
+    <<: *app
+    command: sh -c "python -m app.init_db && python -m app.polling"
+    depends_on:
+      model-pull:
+        condition: service_completed_successfully
+
+  panel:
+    <<: *app
+    command: python -m app.admin_panel
+    environment:
+      <<: *app-env
+      PANEL_HOST: 0.0.0.0
+    ports:
+      # Loopback only. From your computer: ssh -L 8090:127.0.0.1:8090 user@server
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      - bot
+
+volumes:
+  ollama_models:

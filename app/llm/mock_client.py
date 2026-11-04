@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
 
 from app.llm.base import BaseLLMClient
-from app.llm.schemas import DigestSummary, MessageAnalysis
+from app.llm.schemas import (
+    BatchMessage,
+    ConversationAnalysis,
+    ExtractedItem,
+    ExtractedTopic,
+    TopicContext,
+)
 from app.utils.logging import get_logger
-
-Priority = Literal["low", "medium", "high", "critical"]
 
 logger = get_logger(__name__)
 
@@ -23,6 +26,8 @@ NOISE_PATTERNS = [
     r"^\+\d*$",
     r"^(ок|окей|ладно|хорошо|понял|спасибо|thanks|ok|lol|😂|👍)+$",
 ]
+
+MOCK_TOPIC_TITLE = "Рабочие задачи"
 
 
 def _is_noise(text: str) -> bool:
@@ -44,82 +49,49 @@ def _extract_assignee(text: str) -> str | None:
     matches = re.findall(r"@(\w+)", text)
     if matches:
         return "@" + matches[0]
-    for phrase in ["коля", "коле", "петя", "пете", "ваня", "ване"]:
-        if phrase in text.lower():
-            return phrase.capitalize()
     return None
 
 
-def _detect_priority(text: str) -> Priority:
-    lowered = text.lower()
-    if any(w in lowered for w in ["срочно", "критично", "asap", "горит", "критический"]):
-        return "critical"
-    if any(w in lowered for w in ["важно", "высокий", "приоритет"]):
-        return "high"
-    if any(w in lowered for w in ["потом", "когда-нибудь", "не срочно"]):
-        return "low"
-    return "medium"
-
-
 class MockLLMClient(BaseLLMClient):
-    """Rule-based mock LLM for development without an API key."""
+    """Rule-based stand-in for development without a model. It does not understand
+    anything: every task-looking message lands in one catch-all topic."""
 
-    async def analyze_message(
+    async def analyze_conversation(
         self,
-        message_text: str,
-        context_messages: list[dict],
-        active_tasks: list[dict],
-        reply_to_text: str | None = None,
-    ) -> MessageAnalysis:
-        logger.debug("mock_llm.analyze_message", text_len=len(message_text))
+        messages: list[BatchMessage],
+        topics: list[TopicContext],
+        older_topics: list[dict],
+    ) -> ConversationAnalysis:
+        logger.debug("mock_llm.analyze_conversation", messages=len(messages))
+        items: list[ExtractedItem] = []
+        for message in messages:
+            if _is_noise(message.text) or not _detect_task_signal(message.text):
+                continue
+            title = re.split(r"[.!?\n]", message.text)[0].strip()[:200]
+            items.append(
+                ExtractedItem(
+                    kind="task",
+                    text=title or message.text[:200],
+                    quote=message.text[:200],
+                    owner=_extract_assignee(message.text),
+                    source_ids=[message.id],
+                )
+            )
+        if not items:
+            return ConversationAnalysis()
 
-        if _is_noise(message_text):
-            return MessageAnalysis(message_type="noise", contains_task=False, confidence=0.9)
-
-        has_task = _detect_task_signal(message_text)
-        if not has_task:
-            return MessageAnalysis(message_type="noise", contains_task=False, confidence=0.6)
-
-        assignee = _extract_assignee(message_text)
-        priority = _detect_priority(message_text)
-
-        # Build a simple title from first sentence
-        sentences = re.split(r"[.!?\n]", message_text)
-        title = sentences[0].strip()[:200] if sentences else message_text[:200]
-
-        open_questions: list[str] = []
-        should_ask = False
-        clarification_question: str | None = None
-
-        if not assignee:
-            open_questions.append("Кто будет выполнять эту задачу?")
-            should_ask = True
-            clarification_question = "Уточните, пожалуйста, кто возьмёт эту задачу?"
-
-        confidence = 0.75 if has_task else 0.4
-
-        return MessageAnalysis(
-            message_type="task_signal",
-            contains_task=True,
-            new_task=True,
-            task_title=title,
-            summary=message_text[:500],
-            assignee=assignee,
-            priority=priority,
-            open_questions=open_questions,
-            should_ask_clarification=should_ask,
-            clarification_question=clarification_question,
-            confidence=confidence,
+        known = next((t for t in topics if t.title == MOCK_TOPIC_TITLE), None)
+        return ConversationAnalysis(
+            topics=[
+                ExtractedTopic(
+                    topic_id=known.id if known else None,
+                    title=MOCK_TOPIC_TITLE,
+                    summary=f"Выявлено задач: {len(items)}.",
+                    message_ids=[i for item in items for i in item.source_ids],
+                    items=items,
+                )
+            ]
         )
 
-    async def summarize_for_digest(
-        self,
-        messages: list[dict],
-        tasks: list[dict],
-    ) -> DigestSummary:
-        key_points: list[str] = []
-        for task in tasks[:5]:
-            key_points.append(f"Задача: {task.get('title', '—')}")
-
-        summary = f"За период поступило {len(messages)} сообщений, выявлено {len(tasks)} задач."
-        return DigestSummary(key_points=key_points, summary=summary)
+    async def merge_summaries(self, fragments: dict[int, list[str]]) -> dict[int, str]:
+        return {topic_id: " ".join(parts) for topic_id, parts in fragments.items()}
