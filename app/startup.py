@@ -14,7 +14,7 @@ async def run_startup_checks() -> None:
     """Fail on what cannot work, and warn loudly about what would otherwise fail silently."""
     async with engine.connect() as conn:
         if not await conn.run_sync(schema_is_current):
-            raise SystemExit("Схема БД устарела. Выполните: python -m app.init_db")
+            raise SystemExit("The database schema is out of date. Run: python -m app.init_db")
 
     if not settings.allowed_chats:
         logger.warning("startup.no_allowed_chats", hint="Set ALLOWED_CHAT_IDS; every chat is ignored")

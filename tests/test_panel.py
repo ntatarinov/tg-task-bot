@@ -133,7 +133,7 @@ def test_repeated_failures_lock_the_login(client):
     locked = client.post("/api/login", json={"password": PASSWORD})
 
     assert locked.status_code == 429
-    assert "Подождите" in locked.json()["detail"]
+    assert "Wait" in locked.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -734,9 +734,9 @@ def test_summary_shows_the_last_sent_digest_as_text(logged_in):
 @pytest.mark.parametrize(
     "overrides, fragment",
     [
-        ({"bot_token": "placeholder"}, "токен"),
+        ({"bot_token": "placeholder"}, "token"),
         ({"admin_user_ids": ""}, "Telegram ID"),
-        ({"allowed_chat_ids": ""}, "разрешите"),
+        ({"allowed_chat_ids": ""}, "allow it"),
     ],
 )
 def test_setup_steps_name_what_is_missing(logged_in, monkeypatch, overrides, fragment):
@@ -754,7 +754,7 @@ def test_setup_step_for_a_paused_model(logged_in, monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "openai_base_url", "https://api.groq.com/openai/v1")
 
-    assert "модель" in logged_in.get("/api/summary").json()["setup"][0]
+    assert "model" in logged_in.get("/api/summary").json()["setup"][0]
 
 
 def test_setup_step_for_a_model_not_downloaded(monkeypatch):
@@ -763,7 +763,7 @@ def test_setup_step_for_a_model_not_downloaded(monkeypatch):
     monkeypatch.setattr(settings, "openai_base_url", "http://localhost:11434/v1")
     monkeypatch.setattr(settings, "openai_model", "gemma4:26b")
 
-    assert "Скачайте модель gemma4:26b" in panel._setup_steps(["gemma4:12b"])[0]
+    assert "Download the model gemma4:26b" in panel._setup_steps(["gemma4:12b"])[0]
     assert panel._setup_steps(["gemma4:26b"]) == []
 
 
@@ -813,7 +813,7 @@ def test_only_a_few_settings_are_shown_up_front(logged_in):
 
 def test_page_follows_the_stand_workflow():
     page = (panel.STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    steps = ["Сводка", "1. Настройка", "2. Проверка", "3. Перенос"]
+    steps = ["Summary", "1. Setup", "2. Check", "3. Move"]
     assert page.count('data-tab="') == len(steps)
     assert all(step in page for step in steps)
 
@@ -908,7 +908,7 @@ def test_presence_with_a_bad_token(logged_in, monkeypatch):
     response = logged_in.post("/api/chats/presence")
 
     assert response.status_code == 422
-    assert "токен" in response.json()["detail"]
+    assert "token" in response.json()["detail"]
 
 
 def test_presence_failure_never_exposes_the_token(logged_in, monkeypatch):
@@ -1083,3 +1083,101 @@ async def test_stale_restart_request_is_cleared_on_start(tmp_path, monkeypatch):
     await polling.main()
 
     assert not flag.exists()
+
+
+# --- Language ----------------------------------------------------------------
+
+RUSSIAN = {"X-Panel-Language": "ru"}
+
+
+def test_page_starts_in_english_with_a_language_switch(client):
+    page = client.get("/").text
+
+    assert '<html lang="en">' in page and 'class="language-switch"' in page
+    assert page.index("/static/i18n.js") < page.index("/static/panel.js")
+    assert client.get("/static/i18n.js").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "headers, detail",
+    [({}, "Wrong password."), (RUSSIAN, "Неверный пароль."), ({"X-Panel-Language": "de"}, "Wrong password.")],
+)
+def test_errors_come_in_the_panels_language(client, headers, detail):
+    response = client.post("/api/login", json={"password": "nope"}, headers=headers)
+    assert response.json()["detail"] == detail
+
+
+def test_field_labels_come_in_the_panels_language(logged_in):
+    def label(**kwargs):
+        fields = logged_in.get("/api/settings", **kwargs).json()["fields"]
+        return next(f for f in fields if f["key"] == "BOT_TOKEN")
+
+    assert (label()["label"], label()["help"]) == ("Bot token", "From @BotFather.")
+    assert label(headers=RUSSIAN)["label"] == "Токен бота"
+
+
+def test_one_request_does_not_change_the_language_of_the_next(logged_in):
+    logged_in.get("/api/settings", headers=RUSSIAN)
+
+    fields = logged_in.get("/api/settings").json()["fields"]
+
+    assert fields[0]["label"] == "Bot token"
+
+
+def test_check_results_come_in_the_panels_language(logged_in, monkeypatch):
+    monkeypatch.setattr(panel.doctor, "check_telegram", AsyncMock())
+    monkeypatch.setattr(panel.doctor, "check_database", AsyncMock())
+
+    items = logged_in.post("/api/check", headers=RUSSIAN).json()["items"]
+
+    assert any("Администраторов" in i["text"] for i in items)
+
+
+def test_default_language_can_be_changed_from_the_panel(logged_in, env_path):
+    response = logged_in.post("/api/settings", json={"values": {"DEFAULT_LANGUAGE": "ru"}})
+
+    assert response.json()["changed"] == ["DEFAULT_LANGUAGE"]
+    assert "DEFAULT_LANGUAGE=ru" in env_path.read_text(encoding="utf-8")
+
+
+def test_default_language_must_be_a_known_one(logged_in):
+    response = logged_in.post("/api/settings", json={"values": {"DEFAULT_LANGUAGE": "de"}})
+    assert "DEFAULT_LANGUAGE" in response.json()["detail"]["errors"]
+
+
+def _add_chat(client) -> int:
+    async def create() -> int:
+        async with client.factory() as session:
+            chat = await ChatRepository(session).get_or_create(ALLOWED_CHAT, "Team")
+            await session.commit()
+            return chat.id
+
+    return asyncio.run(create())
+
+
+def test_chat_language_is_saved_and_can_go_back_to_the_default(logged_in):
+    chat_id = _add_chat(logged_in)
+
+    assert logged_in.patch(f"/api/chats/{chat_id}", json={"language": "ru"}).json()["language"] == "ru"
+    assert logged_in.get("/api/chats").json()["chats"][0]["language"] == "ru"
+    assert logged_in.patch(f"/api/chats/{chat_id}", json={"language": ""}).json()["language"] is None
+
+
+def test_saving_other_chat_settings_keeps_the_language(logged_in):
+    chat_id = _add_chat(logged_in)
+    logged_in.patch(f"/api/chats/{chat_id}", json={"language": "ru"})
+
+    assert logged_in.patch(f"/api/chats/{chat_id}", json={"digest_time": "10:00"}).json()["language"] == "ru"
+
+
+def test_chat_language_must_be_a_known_one(logged_in):
+    chat_id = _add_chat(logged_in)
+    assert logged_in.patch(f"/api/chats/{chat_id}", json={"language": "de"}).status_code == 422
+
+
+def test_builtin_stack_names_follow_the_panels_language(logged_in):
+    def names(**kwargs):
+        return [s["name"] for s in logged_in.get("/api/stacks", **kwargs).json()["stacks"]]
+
+    assert "Local: gemma4:26b" in names()
+    assert "Локально: gemma4:26b" in names(headers=RUSSIAN)

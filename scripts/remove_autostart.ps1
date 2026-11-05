@@ -4,7 +4,7 @@ $shortcutPath = Join-Path $startupDir "TgTaskBot-AutoStart.lnk"
 
 if (Test-Path $shortcutPath) {
     Remove-Item $shortcutPath -Force
-    Write-Host "Автозапуск отключён (ярлык удалён)." -ForegroundColor Green
+    Write-Host "Autostart is off (shortcut removed)." -ForegroundColor Green
 } else {
-    Write-Host "Ярлык автозапуска не найден — уже отключён." -ForegroundColor Yellow
+    Write-Host "Autostart shortcut not found, it is already off." -ForegroundColor Yellow
 }

@@ -168,7 +168,7 @@ async def main() -> None:
 
         await wait_for(lambda: rows(db, "SELECT COUNT(*) FROM tasks")[0][0] == 1, 30, "batch analysis")
         passed("scheduler analyzes the queue and creates a task")
-        await wait_for(lambda: any("Кто возьмёт задачу" in t for t in texts(fake, ALLOWED)), 15, "clarification")
+        await wait_for(lambda: any("Who will take the task" in t for t in texts(fake, ALLOWED)), 15, "clarification")
         passed("clarification question reaches the chat")
 
         # Same update again, as after a redelivery.
@@ -195,7 +195,7 @@ async def main() -> None:
         passed("foreign chat is ignored; only an admin's /chatid is answered")
 
         fake.message(6, ALLOWED, MEMBER, "/set_digest_time 21:00")
-        await wait_for(lambda: any("только администраторам" in t for t in texts(fake, ALLOWED)), 15, "refusal")
+        await wait_for(lambda: any("for bot admins only" in t for t in texts(fake, ALLOWED)), 15, "refusal")
         assert rows(db, f"SELECT digest_time FROM chats WHERE telegram_chat_id = {ALLOWED}")[0][0] == "18:00"
         passed("ordinary member cannot change settings")
 
@@ -207,14 +207,14 @@ async def main() -> None:
         passed("admin changes the digest time")
 
         fake.message(8, ALLOWED, MEMBER, "/digest week")
-        await wait_for(lambda: any("<b>Дайджест — " in t for t in texts(fake, ALLOWED)), 20, "manual digest")
-        digest = next(t for t in texts(fake, ALLOWED) if "<b>Дайджест — " in t)
-        assert "бэкап" in digest.lower() and "Общие итоги периода" in digest
-        assert next(m for m in fake.sent if "<b>Дайджест — " in m.get("text", "")).get("parse_mode") == "HTML"
+        await wait_for(lambda: any("<b>Digest — " in t for t in texts(fake, ALLOWED)), 20, "manual digest")
+        digest = next(t for t in texts(fake, ALLOWED) if "<b>Digest — " in t)
+        assert "бэкап" in digest.lower() and "Summary of the period" in digest
+        assert next(m for m in fake.sent if "<b>Digest — " in m.get("text", "")).get("parse_mode") == "HTML"
         passed("manual digest for a period is delivered")
 
         fake.message(9, ALLOWED, MEMBER, "/status")
-        await wait_for(lambda: any("Сообщений в очереди" in t for t in texts(fake, ALLOWED)), 15, "/status")
+        await wait_for(lambda: any("Messages in the queue" in t for t in texts(fake, ALLOWED)), 15, "/status")
         passed("/status answers")
 
         # The main use: the bot is added to a group, colleagues talk, and the digests
@@ -249,12 +249,12 @@ async def main() -> None:
         def scheduled(title: str) -> list[str]:
             return [t for t in texts(fake, ALLOWED) if f"<b>{title} — " in t]
 
-        await wait_for(lambda: scheduled("Ежедневный дайджест") and scheduled("Еженедельный дайджест"), 100, "scheduled digests")
-        assert "документацию" in scheduled("Ежедневный дайджест")[0]
+        await wait_for(lambda: scheduled("Daily digest") and scheduled("Weekly digest"), 100, "scheduled digests")
+        assert "документацию" in scheduled("Daily digest")[0]
         passed("daily and weekly digests arrive on schedule with the colleagues' work")
 
         await asyncio.sleep(65)  # one more scheduler tick
-        assert len(scheduled("Ежедневный дайджест")) == 1 and len(scheduled("Еженедельный дайджест")) == 1
+        assert len(scheduled("Daily digest")) == 1 and len(scheduled("Weekly digest")) == 1
         passed("each scheduled digest is sent once")
 
         # The process dies with a message still unanalyzed; it must survive the restart.

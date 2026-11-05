@@ -307,7 +307,7 @@ async def test_new_unassigned_task_asks_one_fixed_question(session):
     results = await analyze(session, chat, llm)
 
     assert results[0].clarification is not None
-    assert results[0].clarification.question == "Кто возьмёт задачу «Обновить сертификаты»?"
+    assert results[0].clarification.question == 'Who will take the task "Обновить сертификаты"?'
     statuses = (await session.execute(select(Task.status))).scalars().all()
     assert sorted(s.value for s in statuses) == ["needs_clarification", "new"]
     assert TaskStatus.needs_clarification in statuses

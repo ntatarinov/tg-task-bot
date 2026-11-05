@@ -19,7 +19,7 @@ INCLUDE = [
     "app", "scripts", "tests", "alembic", "docs",
     "pyproject.toml", "alembic.ini", "Dockerfile", ".dockerignore",
     "docker-compose.selfhost.yml", "docker-compose.cloud.yml", "docker-compose.gpu.yml",
-    "install.sh", ".env.example", "README.md", "DEPLOY.md",
+    "install.sh", ".env.example", "README.md", "README.ru.md", "DEPLOY.md", "DEPLOY.ru.md",
 ]
 SKIPPED_PARTS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
 
@@ -86,10 +86,10 @@ def main() -> None:
     build_bundle(output, with_data=not args.code_only)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    print(f"Готово: {output.name} ({output.stat().st_size / 1_000_000:.1f} МБ)")
+    print(f"Done: {output.name} ({output.stat().st_size / 1_000_000:.1f} MB)")
     if not args.code_only:
-        print("В архиве токены и вся переписка: передавайте его только по защищённому каналу")
-        print("и удалите после установки.")
+        print("The archive holds tokens and the whole chat history: send it only over a secure channel")
+        print("and delete it after installing.")
 
 
 if __name__ == "__main__":

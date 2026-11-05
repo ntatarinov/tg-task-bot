@@ -4,15 +4,15 @@ Set-Location (Join-Path $PSScriptRoot "..")
 $envPath = ".env"
 
 if (-not (Test-Path $envPath)) {
-    Write-Host "Не найден файл .env рядом со скриптом." -ForegroundColor Red
-    Read-Host "Нажмите Enter, чтобы закрыть окно"
+    Write-Host "No .env file found next to the script." -ForegroundColor Red
+    Read-Host "Press Enter to close this window"
     exit 1
 }
 
 $line = Get-Content $envPath | Where-Object { $_ -match '^PUBLIC_BASE_URL=' } | Select-Object -First 1
 if (-not $line) {
-    Write-Host "PUBLIC_BASE_URL не задан в .env — туннель не запущен." -ForegroundColor Yellow
-    Read-Host "Нажмите Enter, чтобы закрыть окно"
+    Write-Host "PUBLIC_BASE_URL is not set in .env, the tunnel was not started." -ForegroundColor Yellow
+    Read-Host "Press Enter to close this window"
     exit 1
 }
 
@@ -20,11 +20,11 @@ $domain = ($line -replace '^PUBLIC_BASE_URL=', '') -replace '^https?://', ''
 $domain = $domain.Trim().TrimEnd('/')
 
 if (-not $domain) {
-    Write-Host "PUBLIC_BASE_URL пустой в .env — туннель не запущен." -ForegroundColor Yellow
-    Read-Host "Нажмите Enter, чтобы закрыть окно"
+    Write-Host "PUBLIC_BASE_URL is empty in .env, the tunnel was not started." -ForegroundColor Yellow
+    Read-Host "Press Enter to close this window"
     exit 1
 }
 
-Write-Host "Открываю туннель на https://$domain ..." -ForegroundColor Cyan
+Write-Host "Opening the tunnel at https://$domain ..." -ForegroundColor Cyan
 ngrok http 8000 --domain=$domain
-Read-Host "Туннель остановился (или упал). Нажмите Enter, чтобы закрыть окно"
+Read-Host "The tunnel stopped (or crashed). Press Enter to close this window"

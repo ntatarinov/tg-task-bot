@@ -28,8 +28,11 @@ class ScriptedLLM(BaseLLMClient):
         messages: list[BatchMessage],
         topics: list[TopicContext],
         older_topics: list[dict],
+        language: str = "en",
     ) -> ConversationAnalysis:
-        self.calls.append({"messages": messages, "topics": topics, "older_topics": older_topics})
+        self.calls.append(
+            {"messages": messages, "topics": topics, "older_topics": older_topics, "language": language}
+        )
         response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         if isinstance(response, Exception):
             raise response
@@ -37,7 +40,7 @@ class ScriptedLLM(BaseLLMClient):
             response = response(messages, topics)
         return ConversationAnalysis(**response)
 
-    async def merge_summaries(self, fragments: dict[int, list[str]]) -> dict[int, str]:
+    async def merge_summaries(self, fragments: dict[int, list[str]], language: str = "en") -> dict[int, str]:
         self.merge_calls.append(fragments)
         return {k: " ".join(v) for k, v in fragments.items()}
 

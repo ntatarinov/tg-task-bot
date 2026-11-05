@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,96 +10,98 @@
 <section id="login" class="login" hidden>
   <form id="login-form" class="login-card">
     <h1>Digest</h1>
-    <label for="password">Пароль</label>
+    <label for="password" data-i18n="login.password">Password</label>
     <input id="password" type="password" autocomplete="current-password" required>
-    <button type="submit" class="primary">Войти</button>
+    <button type="submit" class="primary" data-i18n="login.submit">Sign in</button>
     <p id="login-error" class="error" role="alert"></p>
+    <select class="language-switch" aria-label="Language" data-i18n-label="nav.language"></select>
   </form>
 </section>
 
 <div id="app" hidden>
   <header class="top">
     <strong class="brand">Digest</strong>
-    <nav id="tabs" aria-label="Разделы">
-      <button type="button" data-tab="summary">Сводка</button>
-      <button type="button" data-tab="settings">1. Настройка</button>
-      <button type="button" data-tab="sandbox">2. Проверка</button>
-      <button type="button" data-tab="move">3. Перенос</button>
+    <nav id="tabs" aria-label="Sections" data-i18n-label="nav.sections">
+      <button type="button" data-tab="summary" data-i18n="nav.summary">Summary</button>
+      <button type="button" data-tab="settings" data-i18n="nav.settings">1. Setup</button>
+      <button type="button" data-tab="sandbox" data-i18n="nav.sandbox">2. Check</button>
+      <button type="button" data-tab="move" data-i18n="nav.move">3. Move</button>
     </nav>
-    <button type="button" id="logout" class="quiet">Выйти</button>
+    <select class="language-switch" aria-label="Language" data-i18n-label="nav.language"></select>
+    <button type="button" id="logout" class="quiet" data-i18n="nav.logout">Sign out</button>
   </header>
 
   <div id="restart-bar" class="restart-bar" hidden>
     <span id="restart-text"></span>
-    <button type="button" id="restart" class="primary">Перезапустить бота</button>
+    <button type="button" id="restart" class="primary" data-i18n="restart.button">Restart bot</button>
   </div>
 
   <main>
     <section id="tab-summary" hidden>
       <div id="setup" class="setup" hidden></div>
       <div class="section-head">
-        <label class="inline" for="summary-chat">Чат</label>
+        <label class="inline" for="summary-chat" data-i18n="summary.chat">Chat</label>
         <select id="summary-chat"></select>
-        <select id="summary-days" aria-label="Период">
-          <option value="1">За сутки</option>
-          <option value="7" selected>За неделю</option>
-          <option value="30">За месяц</option>
+        <select id="summary-days" aria-label="Period" data-i18n-label="summary.period">
+          <option value="1" data-i18n="summary.day">Last 24 hours</option>
+          <option value="7" selected data-i18n="summary.week">Last week</option>
+          <option value="30" data-i18n="summary.month">Last month</option>
         </select>
       </div>
       <div id="summary-body" class="board"></div>
       <div class="section-head">
-        <h2>Отчёт</h2>
-        <button type="button" id="digest-build">Собрать за этот период</button>
+        <h2 data-i18n="summary.report">Report</h2>
+        <button type="button" id="digest-build" data-i18n="summary.build">Build for this period</button>
       </div>
       <p id="digest-meta" class="hint"></p>
       <pre id="digest-text" class="digest"></pre>
     </section>
 
     <section id="tab-settings" hidden>
-      <h2>Подключение</h2>
+      <h2 data-i18n="settings.connection">Connection</h2>
       <form id="settings-form" novalidate>
         <div id="fields-basic"></div>
         <details>
-          <summary>Все параметры</summary>
+          <summary data-i18n="settings.all">All settings</summary>
           <div id="fields-advanced"></div>
         </details>
         <div class="save-row">
-          <button type="submit" class="primary">Сохранить</button>
+          <button type="submit" class="primary" data-i18n="common.save">Save</button>
           <span id="save-status" role="status"></span>
         </div>
       </form>
 
-      <h2>Модель</h2>
+      <h2 data-i18n="settings.model">Model</h2>
       <div id="stacks" class="chats"></div>
       <details>
-        <summary>Своя модель и загрузка моделей</summary>
+        <summary data-i18n="stack.custom">Your own model and model downloads</summary>
         <div class="stack">
-          <p class="hint">Подходит любой сервис с API, совместимым с OpenAI.</p>
+          <p class="hint" data-i18n="stack.custom_hint">Any service with an OpenAI-compatible API works.</p>
           <form id="stack-form" class="grid2" novalidate>
-            <div class="field"><label for="s-name">Название</label><input id="s-name"><p id="se-name" class="error"></p></div>
-            <div class="field"><label for="s-base_url">Адрес</label><input id="s-base_url" placeholder="https://…/v1"><p id="se-base_url" class="error"></p></div>
-            <div class="field"><label for="s-model">Модель</label><input id="s-model"><p id="se-model" class="error"></p></div>
-            <div class="field"><label for="s-api_key">Ключ API</label><input id="s-api_key" type="password" autocomplete="off"><p id="se-api_key" class="error"></p></div>
-            <div class="field"><label for="s-reasoning_effort">Рассуждения</label>
-              <select id="s-reasoning_effort"><option value="">не задано</option><option>none</option><option>low</option><option>medium</option><option>high</option></select>
+            <div class="field"><label for="s-name" data-i18n="stack.name">Name</label><input id="s-name"><p id="se-name" class="error"></p></div>
+            <div class="field"><label for="s-base_url" data-i18n="stack.address">Address</label><input id="s-base_url" placeholder="https://…/v1"><p id="se-base_url" class="error"></p></div>
+            <div class="field"><label for="s-model" data-i18n="stack.model">Model</label><input id="s-model"><p id="se-model" class="error"></p></div>
+            <div class="field"><label for="s-api_key" data-i18n="stack.api_key">API key</label><input id="s-api_key" type="password" autocomplete="off"><p id="se-api_key" class="error"></p></div>
+            <div class="field"><label for="s-reasoning_effort" data-i18n="stack.reasoning">Reasoning</label>
+              <select id="s-reasoning_effort"><option value="" data-i18n="common.not_set">not set</option><option>none</option><option>low</option><option>medium</option><option>high</option></select>
               <p id="se-reasoning_effort" class="error"></p></div>
-            <div class="field"><label for="s-max_output_tokens">Предел длины ответа</label><input id="s-max_output_tokens" value="2500"><p id="se-max_output_tokens" class="error"></p></div>
-            <div class="field"><label for="s-timeout_seconds">Таймаут, секунд</label><input id="s-timeout_seconds" value="60"><p id="se-timeout_seconds" class="error"></p></div>
-            <div class="save-row"><button type="submit">Добавить</button><span id="stack-status" role="status"></span></div>
+            <div class="field"><label for="s-max_output_tokens" data-i18n="stack.max_tokens">Answer length limit</label><input id="s-max_output_tokens" value="2500"><p id="se-max_output_tokens" class="error"></p></div>
+            <div class="field"><label for="s-timeout_seconds" data-i18n="stack.timeout">Timeout, seconds</label><input id="s-timeout_seconds" value="60"><p id="se-timeout_seconds" class="error"></p></div>
+            <div class="save-row"><button type="submit" data-i18n="stack.add">Add</button><span id="stack-status" role="status"></span></div>
           </form>
           <p id="models-installed" class="hint"></p>
           <form id="pull-form" class="save-row">
-            <input id="pull-model" placeholder="gemma4:26b" aria-label="Имя модели">
-            <button type="submit">Скачать модель</button>
+            <input id="pull-model" placeholder="gemma4:26b" aria-label="Model name" data-i18n-label="stack.model_name">
+            <button type="submit" data-i18n="stack.pull">Download model</button>
             <span id="pull-status" role="status"></span>
           </form>
         </div>
       </details>
 
-      <h2>Чаты</h2>
-      <p class="hint">Добавьте бота в группу, пока он запущен: она появится здесь. Для теста заведите отдельную группу.</p>
+      <h2 data-i18n="settings.chats">Chats</h2>
+      <p class="hint" data-i18n="settings.chats_hint">Add the bot to a group while it is running and the group appears here. For a test, create a separate group.</p>
       <div class="save-row">
-        <button type="button" id="presence">Где сейчас бот</button>
+        <button type="button" id="presence" data-i18n="presence.button">Where is the bot</button>
         <span id="presence-status" role="status"></span>
       </div>
       <ul id="presence-results" class="checks"></ul>
@@ -109,70 +111,70 @@
 
     <section id="tab-sandbox" hidden>
       <div class="section-head">
-        <h2>Проверка стенда</h2>
-        <button type="button" id="check" class="primary">Проверить всё</button>
+        <h2 data-i18n="check.title">Instance check</h2>
+        <button type="button" id="check" class="primary" data-i18n="check.button">Check everything</button>
       </div>
-      <p class="hint">Токен, чаты, база и модель.</p>
+      <p class="hint" data-i18n="check.hint">Token, chats, database and model.</p>
       <ul id="check-results" class="checks"></ul>
 
-      <h2>Проверка на своей переписке</h2>
-      <p class="hint">Вставьте текст и посмотрите, что найдёт бот. Рабочие данные и чаты не затрагиваются.</p>
+      <h2 data-i18n="sandbox.title">Try it on your own conversation</h2>
+      <p class="hint" data-i18n="sandbox.hint">Paste some text and see what the bot finds. Work data and chats are not touched.</p>
       <div class="field">
-        <label for="sandbox-text">Переписка</label>
+        <label for="sandbox-text" data-i18n="sandbox.text">Conversation</label>
         <textarea id="sandbox-text" rows="9" spellcheck="false"></textarea>
-        <small>Каждое сообщение с новой строки: «Автор: текст».</small>
+        <small data-i18n="sandbox.format">One message per line: "Author: text".</small>
       </div>
       <div class="field">
-        <label for="sandbox-stack">Модель</label>
+        <label for="sandbox-stack" data-i18n="sandbox.model">Model</label>
         <select id="sandbox-stack"></select>
       </div>
       <div id="sandbox-confirm" class="confirm" hidden>
         <input id="sandbox-confirm-box" type="checkbox">
-        <label for="sandbox-confirm-box">Это внешний сервис. В тексте нет рабочих данных.</label>
+        <label for="sandbox-confirm-box" data-i18n="sandbox.confirm">This is an external service. The text has no work data.</label>
       </div>
       <div class="save-row">
-        <button type="button" id="sandbox-run" class="primary">Запустить</button>
+        <button type="button" id="sandbox-run" class="primary" data-i18n="sandbox.run">Run</button>
         <span id="sandbox-status" role="status"></span>
       </div>
       <div id="sandbox-results" class="results"></div>
     </section>
 
     <section id="tab-move" hidden>
-      <h2>Перенос на другой стенд</h2>
+      <h2 data-i18n="move.title">Move to another instance</h2>
       <div id="move-summary" class="summary"></div>
-      <p id="move-warning" class="error" hidden>База работает не на SQLite и в архив не войдёт. Перенесите её средствами вашей базы.</p>
+      <p id="move-warning" class="error" hidden data-i18n="move.no_sqlite">The database does not run on SQLite and will not be in the archive. Move it with your database's own tools.</p>
       <ol class="steps">
         <li>
-          <strong>Скачайте архив</strong> с кодом, настройками и данными.
+          <strong data-i18n="move.step1_title">Download the archive</strong><span data-i18n="move.step1_text"> with the code, settings and data.</span>
           <form id="export-form" class="save-row">
-            <input id="export-password" type="password" autocomplete="current-password" aria-label="Пароль панели" placeholder="Пароль панели" required>
-            <button type="submit" class="primary">Скачать архив</button>
+            <input id="export-password" type="password" autocomplete="current-password" aria-label="Panel password" placeholder="Panel password" data-i18n-label="move.password" data-i18n-placeholder="move.password" required>
+            <button type="submit" class="primary" data-i18n="move.download">Download archive</button>
             <span id="export-status" role="status"></span>
           </form>
-          <small>В архиве токены и вся переписка. Передавайте его только по защищённому каналу и удалите после установки.</small>
+          <small data-i18n="move.step1_note">The archive holds tokens and the whole chat history. Send it only over a secure channel and delete it after installing.</small>
         </li>
-        <li><strong>Остановите бота здесь.</strong> С одним токеном может работать только один экземпляр.</li>
+        <li><strong data-i18n="move.step2_title">Stop the bot here.</strong><span data-i18n="move.step2_text"> Only one instance can run with a token.</span></li>
         <li>
-          <strong>Установите на новом стенде</strong> (Linux, от 32 ГБ ОЗУ для локальной модели):
+          <strong data-i18n="move.step3_title">Install on the new instance</strong><span data-i18n="move.step3_text"> (Linux, 32 GB of RAM or more for a local model):</span>
           <pre>unzip digest-bot-*.zip -d digest-bot
 cd digest-bot
 sh install.sh</pre>
-          <small>Если модель работает в облаке: <code>sh install.sh cloud</code>. Тогда хватит небольшого сервера.</small>
+          <small><span data-i18n="move.step3_note_before">If the model runs in the cloud: </span><code>sh install.sh cloud</code><span data-i18n="move.step3_note_after">. A small server is enough then.</span></small>
         </li>
         <li>
-          <strong>Откройте панель на новом стенде</strong> через SSH-туннель и пройдите шаг «Проверка»:
-          <pre>ssh -L 8090:127.0.0.1:8090 пользователь@сервер</pre>
-          <small>Затем http://localhost:8090. Пароль тот же, он лежит в файле .env.</small>
+          <strong data-i18n="move.step4_title">Open the panel on the new instance</strong><span data-i18n="move.step4_text"> through an SSH tunnel and go through the Check step:</span>
+          <pre data-i18n="move.ssh">ssh -L 8090:127.0.0.1:8090 user@server</pre>
+          <small data-i18n="move.step4_note">Then http://localhost:8090. The password is the same, it is in the .env file.</small>
         </li>
         <li>
-          <strong>Подключите чат.</strong> В разделе «Настройка» нажмите «Где сейчас бот» и посмотрите, где он есть.
-          Новый чат: добавьте туда бота и нажмите «Разрешить». Лишний чат: нажмите «Запретить».
-          <small>Если на новом стенде другой бот, сначала вставьте его токен и добавьте его в группы заново.</small>
+          <strong data-i18n="move.step5_title">Connect the chat.</strong><span data-i18n="move.step5_text"> In the Setup section press "Where is the bot" to see where it is. New chat: add the bot there and press "Allow". Unneeded chat: press "Block".</span>
+          <small data-i18n="move.step5_note">If the new instance uses another bot, paste its token first and add it to the groups again.</small>
         </li>
       </ol>
     </section>
   </main>
 </div>
+<script src="/static/i18n.js"></script>
 <script src="/static/panel.js"></script>
 </body>
 </html>

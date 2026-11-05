@@ -30,6 +30,7 @@ def _isolated_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "dashboard_secret", "")
     monkeypatch.setattr(settings, "webhook_secret", "")
     monkeypatch.setattr(settings, "app_env", "local")
+    monkeypatch.setattr(settings, "default_language", "en")
     monkeypatch.setattr(settings, "llm_provider", "mock")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "openai_base_url", "")

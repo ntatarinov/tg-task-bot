@@ -43,6 +43,7 @@ from app.db.models import (
 from app.db.repositories import ChatRepository, MessageRepository, TaskRepository, TopicRepository
 from app.db.session import get_session
 from app.env_file import read_env, update_env
+from app.i18n import LANGUAGES, current_language, has_text, tr, use_language
 from app.llm.base import LLMError
 from app.llm.openai_client import is_local_endpoint, llm_block_reason
 from app.services.digest_service import DigestService
@@ -67,48 +68,61 @@ _IDS_RE = re.compile(r"^\s*-?\d+(\s*[,;]\s*-?\d+)*\s*$")
 @dataclass(frozen=True)
 class Field:
     key: str
-    label: str
-    group: str
+    group_key: str
     kind: str = "text"  # text, secret, bool, int, ids, url, time, timezone, select
-    help: str = ""
     options: tuple[str, ...] = ()
     minimum: int = 0
+
+    @property
+    def label(self) -> str:
+        return tr(f"field.{self.key}")
+
+    @property
+    def group(self) -> str:
+        return tr(f"group.{self.group_key}")
+
+    @property
+    def help(self) -> str:
+        key = f"field.{self.key}.help"
+        return tr(key) if has_text(key) else ""
 
 
 # An allowlist on purpose: the panel can change these and nothing else in the file.
 FIELDS: tuple[Field, ...] = (
-    Field("BOT_TOKEN", "Токен бота", "Telegram", "secret", "Из @BotFather."),
-    Field("ALLOWED_CHAT_IDS", "Разрешённые чаты", "Telegram", "ids", "ID через запятую. Остальные чаты бот игнорирует."),
-    Field("ADMIN_USER_IDS", "Администраторы", "Telegram", "ids", "Telegram ID тех, кто может менять настройки в боте."),
-    Field("LLM_PROVIDER", "Режим анализа", "Модель", "select", "mock не понимает смысл и подходит только для проверки.", ("openai", "mock")),
-    Field("OPENAI_BASE_URL", "Адрес модели", "Модель", "url", "Ollama: http://localhost:11434/v1"),
-    Field("OPENAI_MODEL", "Модель", "Модель", "text", "Проверяйте новую модель через scripts/eval_llm.py."),
-    Field("OPENAI_API_KEY", "Ключ API", "Модель", "secret", "Для Ollama подойдёт любое значение."),
-    Field("LLM_EXTERNAL_ALLOWED", "Разрешить внешний сервис", "Модель", "bool", "Переписка уйдёт стороннему сервису. Нужно разрешение владельца данных."),
-    Field("LLM_REASONING_EFFORT", "Рассуждения модели", "Модель", "select", "Для gemma4 ставьте none, иначе ответы медленные и обрезаются.", ("", "none", "low", "medium", "high")),
-    Field("LLM_MAX_OUTPUT_TOKENS", "Предел длины ответа", "Модель", "int", "В токенах.", minimum=256),
-    Field("LLM_TIMEOUT_SECONDS", "Таймаут запроса", "Модель", "int", "В секундах. Без видеокарты ставьте 900.", minimum=5),
-    Field("ANALYSIS_INTERVAL_SECONDS", "Проверять очередь каждые", "Анализ", "int", "В секундах.", minimum=5),
-    Field("ANALYSIS_BATCH_MAX_MESSAGES", "Сообщений в пакете", "Анализ", "int", minimum=1),
-    Field("ANALYSIS_BATCH_MAX_CHARS", "Символов в пакете", "Анализ", "int", minimum=200),
-    Field("ANALYSIS_MIN_BATCH_MESSAGES", "Начинать с сообщений", "Анализ", "int", "Или когда первое ждёт дольше предела ниже.", minimum=1),
-    Field("ANALYSIS_MAX_WAIT_SECONDS", "Максимальное ожидание", "Анализ", "int", "В секундах.", minimum=0),
-    Field("CLARIFICATIONS_ENABLED", "Спрашивать, кто возьмёт задачу", "Анализ", "bool"),
-    Field("CLARIFICATION_COOLDOWN_HOURS", "Пауза между вопросами", "Анализ", "int", "В часах.", minimum=0),
-    Field("DEFAULT_TIMEZONE", "Часовой пояс новых чатов", "Отчёты", "timezone"),
-    Field("DEFAULT_DIGEST_TIME", "Время отчёта новых чатов", "Отчёты", "time"),
-    Field("DIGEST_CATCHUP_HOURS", "Догонять пропущенный отчёт", "Отчёты", "int", "В часах.", minimum=0),
-    Field("MESSAGE_RETENTION_DAYS", "Хранить сообщения", "Хранение", "int", "В днях, 0 значит бессрочно. Старые сообщения удалятся необратимо."),
-    Field("RAW_UPDATE_RETENTION_DAYS", "Хранить сырые данные Telegram", "Хранение", "int", "В днях, 0 значит бессрочно."),
-    Field("DASHBOARD_SECRET", "Секрет панели задач", "Панель задач", "secret"),
-    Field("PUBLIC_BASE_URL", "Публичный адрес панели задач", "Панель задач", "url"),
-    Field("APP_ENV", "Режим работы", "Сервер", "select", "production закрывает панель задач и webhook, если у них нет секрета.", ("local", "production")),
-    Field("DATABASE_URL", "Адрес базы данных", "Сервер", "secret", "Смена адреса не переносит данные: бот начнёт с пустой базы. Работа с Postgres не проверялась."),
-    Field("REDIS_URL", "Адрес Redis", "Сервер", "text", "Необязательно: без Redis бот работает через базу."),
-    Field("WEBHOOK_URL", "Адрес webhook", "Сервер", "url", "Оставьте пустым для long polling, это основной режим."),
-    Field("WEBHOOK_SECRET", "Секрет webhook", "Сервер", "secret", "Обязателен для webhook вне режима local."),
-    Field("TELEGRAM_API_BASE", "Свой сервер Bot API", "Сервер", "url", "Обычно пусто."),
+    Field("BOT_TOKEN", "telegram", "secret"),
+    Field("ALLOWED_CHAT_IDS", "telegram", "ids"),
+    Field("ADMIN_USER_IDS", "telegram", "ids"),
+    Field("LLM_PROVIDER", "model", "select", ("openai", "mock")),
+    Field("OPENAI_BASE_URL", "model", "url"),
+    Field("OPENAI_MODEL", "model", "text"),
+    Field("OPENAI_API_KEY", "model", "secret"),
+    Field("LLM_EXTERNAL_ALLOWED", "model", "bool"),
+    Field("LLM_REASONING_EFFORT", "model", "select", ("", "none", "low", "medium", "high")),
+    Field("LLM_MAX_OUTPUT_TOKENS", "model", "int", minimum=256),
+    Field("LLM_TIMEOUT_SECONDS", "model", "int", minimum=5),
+    Field("ANALYSIS_INTERVAL_SECONDS", "analysis", "int", minimum=5),
+    Field("ANALYSIS_BATCH_MAX_MESSAGES", "analysis", "int", minimum=1),
+    Field("ANALYSIS_BATCH_MAX_CHARS", "analysis", "int", minimum=200),
+    Field("ANALYSIS_MIN_BATCH_MESSAGES", "analysis", "int", minimum=1),
+    Field("ANALYSIS_MAX_WAIT_SECONDS", "analysis", "int", minimum=0),
+    Field("CLARIFICATIONS_ENABLED", "analysis", "bool"),
+    Field("CLARIFICATION_COOLDOWN_HOURS", "analysis", "int", minimum=0),
+    Field("DEFAULT_LANGUAGE", "reports", "select", LANGUAGES),
+    Field("DEFAULT_TIMEZONE", "reports", "timezone"),
+    Field("DEFAULT_DIGEST_TIME", "reports", "time"),
+    Field("DIGEST_CATCHUP_HOURS", "reports", "int", minimum=0),
+    Field("MESSAGE_RETENTION_DAYS", "storage", "int"),
+    Field("RAW_UPDATE_RETENTION_DAYS", "storage", "int"),
+    Field("DASHBOARD_SECRET", "task_site", "secret"),
+    Field("PUBLIC_BASE_URL", "task_site", "url"),
+    Field("APP_ENV", "server", "select", ("local", "production")),
+    Field("DATABASE_URL", "server", "secret"),
+    Field("REDIS_URL", "server", "text"),
+    Field("WEBHOOK_URL", "server", "url"),
+    Field("WEBHOOK_SECRET", "server", "secret"),
+    Field("TELEGRAM_API_BASE", "server", "url"),
 )
+
 FIELDS_BY_KEY = {f.key: f for f in FIELDS}
 # All most people ever touch; the rest stays folded away.
 BASIC_KEYS = {"BOT_TOKEN", "ADMIN_USER_IDS"}
@@ -117,23 +131,23 @@ BASIC_KEYS = {"BOT_TOKEN", "ADMIN_USER_IDS"}
 def validate_value(field: Field, value: str) -> str | None:
     """Returns what is wrong with a value, in words for the person typing it."""
     if "\n" in value or "\r" in value:
-        return "Значение должно быть в одну строку."
+        return tr("panel.one_line")
     if not value:
-        return None if field.kind in ("ids", "url", "select", "secret", "text") else "Заполните поле."
+        return None if field.kind in ("ids", "url", "select", "secret", "text") else tr("panel.required")
     if field.kind == "bool" and value not in ("true", "false"):
-        return "Ожидается true или false."
+        return tr("panel.expected_bool")
     if field.kind == "int" and (not value.isdigit() or int(value) < field.minimum):
-        return f"Ожидается целое число не меньше {field.minimum}."
+        return tr("panel.expected_int", minimum=field.minimum)
     if field.kind == "ids" and not _IDS_RE.match(value):
-        return "Ожидаются числа через запятую."
+        return tr("panel.expected_ids")
     if field.kind == "url" and not (urlparse(value).scheme in ("http", "https") and urlparse(value).hostname):
-        return "Ожидается адрес вида https://example.com."
+        return tr("panel.expected_url")
     if field.kind == "time" and not is_valid_digest_time(value):
-        return "Ожидается время вида 18:00."
+        return tr("panel.expected_time")
     if field.kind == "timezone" and not is_valid_timezone(value):
-        return "Неизвестный часовой пояс. Пример: Asia/Almaty."
+        return tr("panel.unknown_timezone_example")
     if field.kind == "select" and value not in field.options:
-        return "Выберите значение из списка."
+        return tr("panel.pick_from_list")
     return None
 
 
@@ -218,6 +232,7 @@ class ChatBody(BaseModel):
     weekly_digest_day: int | None = None
     digest_chat_id: int | None = None
     clear_digest_chat: bool = False
+    language: str | None = None  # empty means follow DEFAULT_LANGUAGE
 
 
 class AccessBody(BaseModel):
@@ -268,7 +283,7 @@ class PullBody(BaseModel):
 
 def require_session(request: Request) -> None:
     if not session_is_valid(request.cookies.get(COOKIE_NAME)):
-        raise HTTPException(status_code=401, detail="Войдите в панель.")
+        raise HTTPException(status_code=401, detail=tr("panel.sign_in"))
 
 
 app = FastAPI(title="Digest Panel", docs_url=None, redoc_url=None, openapi_url=None)
@@ -276,11 +291,12 @@ app = FastAPI(title="Digest Panel", docs_url=None, redoc_url=None, openapi_url=N
 
 @app.middleware("http")
 async def protect(request: Request, call_next):
+    use_language(request.headers.get("x-panel-language"))
     # SameSite covers browsers that honour it; this also refuses cross-site writes from others.
     if request.method not in ("GET", "HEAD"):
         origin = request.headers.get("origin")
         if origin and urlparse(origin).netloc != request.headers.get("host"):
-            return JSONResponse({"detail": "Запрос с другого сайта отклонён."}, status_code=403)
+            return JSONResponse({"detail": tr("panel.foreign_origin")}, status_code=403)
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -298,11 +314,11 @@ async def index() -> FileResponse:
 async def login(body: LoginBody, response: Response) -> dict[str, bool]:
     wait = throttle.seconds_left()
     if wait:
-        raise HTTPException(status_code=429, detail=f"Слишком много попыток. Подождите {wait} с.")
+        raise HTTPException(status_code=429, detail=tr("panel.too_many_attempts", seconds=wait))
     if not hmac.compare_digest(body.password.encode("utf-8"), settings.admin_panel_password.encode("utf-8")):
         throttle.record_failure()
         logger.warning("panel.login_failed")
-        raise HTTPException(status_code=401, detail="Неверный пароль.")
+        raise HTTPException(status_code=401, detail=tr("panel.wrong_password"))
     throttle.reset()
     response.set_cookie(
         COOKIE_NAME, make_session_cookie(), max_age=SESSION_SECONDS, httponly=True, samesite="strict", path="/"
@@ -351,10 +367,10 @@ async def save_settings(body: SettingsBody) -> dict[str, Any]:
     for key, raw in body.values.items():
         field = FIELDS_BY_KEY.get(key)
         if field is None:
-            errors[key] = "Эту настройку нельзя менять из панели."
+            errors[key] = tr("panel.not_editable")
             continue
         if key in os.environ:
-            errors[key] = "Значение задано на сервере и здесь не меняется."
+            errors[key] = tr("panel.locked")
             continue
         value = raw.strip()
         if field.kind == "secret" and not value:
@@ -367,7 +383,7 @@ async def save_settings(body: SettingsBody) -> dict[str, Any]:
 
     turning_on = changes.get("LLM_EXTERNAL_ALLOWED") == "true"
     if turning_on and not body.confirm_external:
-        errors["LLM_EXTERNAL_ALLOWED"] = "Подтвердите, что владелец данных разрешил внешний сервис."
+        errors["LLM_EXTERNAL_ALLOWED"] = tr("panel.confirm_owner")
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
@@ -382,15 +398,15 @@ def _setup_steps(models: list[str]) -> list[str]:
     """What stands between this install and a working bot, in the order to do it."""
     steps: list[str] = []
     if settings.bot_token in ("", "placeholder"):
-        steps.append("Вставьте токен бота в разделе «Настройка».")
+        steps.append(tr("panel.step_token"))
     if not settings.admins:
-        steps.append("Укажите свой Telegram ID в разделе «Настройка».")
+        steps.append(tr("panel.step_admin"))
     if not settings.allowed_chats:
-        steps.append("Добавьте бота в группу, напишите там сообщение и разрешите её в разделе «Настройка».")
+        steps.append(tr("panel.step_chat"))
     if llm_block_reason():
-        steps.append("Выберите модель в разделе «Настройка». Сейчас анализ на паузе.")
+        steps.append(tr("panel.step_model"))
     elif is_local_endpoint(settings.openai_base_url) and models and settings.openai_model not in models:
-        steps.append(f"Скачайте модель {settings.openai_model} в разделе «Настройка».")
+        steps.append(tr("panel.step_pull", model=settings.openai_model))
     return steps
 
 
@@ -459,11 +475,11 @@ async def set_task_status(
     try:
         status = TaskStatus(body.status)
     except ValueError:
-        raise HTTPException(status_code=422, detail="Неизвестный статус.") from None
+        raise HTTPException(status_code=422, detail=tr("panel.unknown_status")) from None
     repo = TaskRepository(session)
     task = await repo.get_by_id(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Задача не найдена.")
+        raise HTTPException(status_code=404, detail=tr("panel.task_not_found"))
     await repo.set_status(task, status)
     return {"status": status.value}
 
@@ -475,7 +491,7 @@ async def digest_preview(
     """Build a digest to read here. Nothing is sent, and it is not kept."""
     chat = await ChatRepository(session).get_by_id(body.chat_id)
     if chat is None:
-        raise HTTPException(status_code=404, detail="Чат не найден.")
+        raise HTTPException(status_code=404, detail=tr("panel.chat_not_found"))
     end = now_utc()
     start = end - timedelta(days=max(1, min(body.days, 365)))
     digest = await DigestService(session, _make_llm()).build_digest(chat, start, end)
@@ -539,6 +555,7 @@ async def _chat_view(session: AsyncSession, chat: Chat) -> dict[str, Any]:
         "weekly_digest_enabled": chat.weekly_digest_enabled,
         "weekly_digest_day": chat.weekly_digest_day,
         "digest_chat_id": chat.digest_chat_id,
+        "language": chat.language,
         "pending": pending,
         "last_digest_at": ensure_aware_utc(last_digest).isoformat() if last_digest else None,
     }
@@ -608,13 +625,13 @@ async def chat_presence(session: AsyncSession = Depends(get_session)) -> dict[st
         async with httpx.AsyncClient(timeout=15) as client:
             me = await _telegram(client, "getMe")
             if not me.get("ok"):
-                raise HTTPException(status_code=422, detail="Telegram не принял токен. Вставьте рабочий токен.")
+                raise HTTPException(status_code=422, detail=tr("panel.token_refused"))
             bot = me["result"]
             chats = [await _presence(client, bot["id"], i, t) for i, t in known.items()]
     except (httpx.HTTPError, ValueError, KeyError) as e:
         # Only the type: the request URL contains the token.
         logger.warning("panel.presence_failed", error=type(e).__name__)
-        raise HTTPException(status_code=502, detail="Не удалось связаться с Telegram.") from None
+        raise HTTPException(status_code=502, detail=tr("panel.telegram_unreachable")) from None
     return {"bot": bot.get("username"), "chats": chats}
 
 
@@ -622,7 +639,7 @@ async def chat_presence(session: AsyncSession = Depends(get_session)) -> dict[st
 async def change_access(body: AccessBody) -> dict[str, Any]:
     """Allow or forbid a chat. The bot reads this list at start, so it needs a restart."""
     if "ALLOWED_CHAT_IDS" in os.environ:
-        raise HTTPException(status_code=422, detail="Список чатов задан на сервере и здесь не меняется.")
+        raise HTTPException(status_code=422, detail=tr("panel.chats_locked"))
     ids = _parse_id_list(read_env(ENV_PATH).get("ALLOWED_CHAT_IDS", ""))
     if body.allowed:
         ids.add(body.telegram_chat_id)
@@ -640,9 +657,9 @@ async def purge_chat(
 ) -> dict[str, int]:
     """Remove a chat's messages, topics and digests, for example after a test chat."""
     if not body.confirm:
-        raise HTTPException(status_code=422, detail="Подтвердите удаление.")
+        raise HTTPException(status_code=422, detail=tr("panel.confirm_delete"))
     if await ChatRepository(session).get_by_id(chat_id) is None:
-        raise HTTPException(status_code=404, detail="Чат не найден.")
+        raise HTTPException(status_code=404, detail=tr("panel.chat_not_found"))
     removed = await RetentionService(session).purge_chat(chat_id)
     logger.info("panel.chat_purged", chat_id=chat_id, removed=removed)
     return {"removed": removed}
@@ -655,15 +672,17 @@ async def update_chat(
     repo = ChatRepository(session)
     chat = await repo.get_by_id(chat_id)
     if chat is None:
-        raise HTTPException(status_code=404, detail="Чат не найден.")
+        raise HTTPException(status_code=404, detail=tr("panel.chat_not_found"))
     if body.timezone is not None and not is_valid_timezone(body.timezone):
-        raise HTTPException(status_code=422, detail="Неизвестный часовой пояс.")
+        raise HTTPException(status_code=422, detail=tr("panel.unknown_timezone"))
     if body.digest_time is not None and not is_valid_digest_time(body.digest_time):
-        raise HTTPException(status_code=422, detail="Ожидается время вида 18:00.")
+        raise HTTPException(status_code=422, detail=tr("panel.expected_time"))
     if body.weekly_digest_day is not None and not 0 <= body.weekly_digest_day <= 6:
-        raise HTTPException(status_code=422, detail="День недели указан неверно.")
+        raise HTTPException(status_code=422, detail=tr("panel.bad_weekday"))
+    if body.language and body.language not in LANGUAGES:
+        raise HTTPException(status_code=422, detail=tr("panel.bad_language"))
     if body.digest_chat_id is not None and body.digest_chat_id not in settings.allowed_chats:
-        raise HTTPException(status_code=422, detail="Отчёты можно отправлять только в разрешённый чат.")
+        raise HTTPException(status_code=422, detail=tr("panel.target_not_allowed"))
 
     await repo.update_settings(
         chat,
@@ -673,6 +692,8 @@ async def update_chat(
         weekly_digest_enabled=body.weekly_digest_enabled,
         weekly_digest_day=body.weekly_digest_day,
     )
+    if body.language is not None:
+        await repo.set_language(chat, body.language or None)
     if body.clear_digest_chat:
         await repo.set_digest_target(chat, None)
     elif body.digest_chat_id is not None:
@@ -719,10 +740,10 @@ async def export_bundle(body: ExportBody) -> FileResponse:
     """
     wait = throttle.seconds_left()
     if wait:
-        raise HTTPException(status_code=429, detail=f"Слишком много попыток. Подождите {wait} с.")
+        raise HTTPException(status_code=429, detail=tr("panel.too_many_attempts", seconds=wait))
     if not hmac.compare_digest(body.password.encode("utf-8"), settings.admin_panel_password.encode("utf-8")):
         throttle.record_failure()
-        raise HTTPException(status_code=401, detail="Неверный пароль.")
+        raise HTTPException(status_code=401, detail=tr("panel.wrong_password"))
     throttle.reset()
 
     workdir = Path(tempfile.mkdtemp(prefix="digest_export_"))
@@ -768,19 +789,19 @@ async def add_stack(body: StackBody) -> dict[str, Any]:
     errors: dict[str, str] = {}
     problem = validate_value(FIELDS_BY_KEY["OPENAI_BASE_URL"], body.base_url.strip())
     if problem or not body.base_url.strip():
-        errors["base_url"] = problem or "Заполните поле."
+        errors["base_url"] = problem or tr("panel.required")
     if not stacks.MODEL_NAME_RE.match(body.model.strip()):
-        errors["model"] = "Укажите имя модели, например gemma4:26b."
+        errors["model"] = tr("panel.model_name_needed")
     if not body.name.strip() or "\n" in body.name:
-        errors["name"] = "Укажите название в одну строку."
+        errors["name"] = tr("panel.stack_name_needed")
     if "\n" in body.api_key or "\r" in body.api_key:
-        errors["api_key"] = "Значение должно быть в одну строку."
+        errors["api_key"] = tr("panel.one_line")
     if body.reasoning_effort not in FIELDS_BY_KEY["LLM_REASONING_EFFORT"].options:
-        errors["reasoning_effort"] = "Выберите значение из списка."
+        errors["reasoning_effort"] = tr("panel.pick_from_list")
     if body.max_output_tokens < 256:
-        errors["max_output_tokens"] = "Ожидается число не меньше 256."
+        errors["max_output_tokens"] = tr("panel.expected_tokens")
     if body.timeout_seconds < 5:
-        errors["timeout_seconds"] = "Ожидается число не меньше 5."
+        errors["timeout_seconds"] = tr("panel.expected_timeout")
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
@@ -801,7 +822,7 @@ async def add_stack(body: StackBody) -> dict[str, Any]:
 @app.delete("/api/stacks/{stack_id}", dependencies=[Depends(require_session)])
 async def remove_stack(stack_id: str) -> dict[str, bool]:
     if not stacks.delete_custom(stack_id):
-        raise HTTPException(status_code=404, detail="Этот вариант нельзя удалить.")
+        raise HTTPException(status_code=404, detail=tr("panel.stack_not_deletable"))
     return {"ok": True}
 
 
@@ -809,17 +830,17 @@ async def remove_stack(stack_id: str) -> dict[str, bool]:
 async def apply_stack(stack_id: str, body: ApplyBody) -> dict[str, Any]:
     stack = stacks.find_stack(stack_id)
     if stack is None:
-        raise HTTPException(status_code=404, detail="Вариант не найден.")
+        raise HTTPException(status_code=404, detail=tr("panel.stack_not_found"))
     external = stacks.is_external(stack)
     if external and not body.confirm_external:
-        raise HTTPException(status_code=422, detail="Подтвердите, что владелец данных разрешил этот сервис.")
+        raise HTTPException(status_code=422, detail=tr("panel.stack_confirm_owner"))
     if external and not (stack.api_key or settings.openai_api_key):
-        raise HTTPException(status_code=422, detail="Для этого варианта нужен ключ API. Задайте его в настройках.")
+        raise HTTPException(status_code=422, detail=tr("panel.stack_key_in_settings"))
 
     changes = stacks.env_changes(stack, external_allowed=external)
     locked = sorted(key for key in changes if key in os.environ)
     if locked:
-        raise HTTPException(status_code=422, detail=f"Значения заданы на сервере: {', '.join(locked)}.")
+        raise HTTPException(status_code=422, detail=tr("panel.stack_locked", keys=", ".join(locked)))
     update_env(ENV_PATH, changes)
     reload_settings()
     logger.info("panel.stack_applied", stack=stack.id, external=external)
@@ -831,22 +852,22 @@ async def sandbox(body: SandboxBody) -> dict[str, Any]:
     """Try a stack on a pasted conversation. The bot and its data are not involved."""
     stack = stacks.current_stack() if body.stack_id == "current" else stacks.find_stack(body.stack_id)
     if stack is None:
-        raise HTTPException(status_code=404, detail="Вариант не найден.")
+        raise HTTPException(status_code=404, detail=tr("panel.stack_not_found"))
     if not body.text.strip():
-        raise HTTPException(status_code=422, detail="Вставьте переписку.")
+        raise HTTPException(status_code=422, detail=tr("panel.paste_chat"))
     if len(body.text) > MAX_SANDBOX_CHARS:
-        raise HTTPException(status_code=422, detail=f"Слишком длинный текст, предел {MAX_SANDBOX_CHARS} символов.")
+        raise HTTPException(status_code=422, detail=tr("panel.text_too_long", limit=MAX_SANDBOX_CHARS))
     external = stacks.is_external(stack)
     if external and not body.confirm_external and not settings.llm_external_allowed:
-        raise HTTPException(status_code=422, detail="Текст уйдёт внешнему сервису. Подтвердите, что в нём нет рабочих данных.")
+        raise HTTPException(status_code=422, detail=tr("panel.confirm_no_work_data"))
     if external and not (stack.api_key or settings.openai_api_key):
-        raise HTTPException(status_code=422, detail="Для этого варианта нужен ключ API.")
+        raise HTTPException(status_code=422, detail=tr("panel.stack_key_needed"))
 
     llm = stacks.make_client(stack, allow_external=external)
     try:
-        result = await run_sandbox(llm, body.text)
+        result = await run_sandbox(llm, body.text, current_language())
     except LLMError as e:
-        raise HTTPException(status_code=502, detail=f"Модель не ответила: {e}") from e
+        raise HTTPException(status_code=502, detail=tr("panel.model_no_answer", error=e)) from e
     return {**result, "stack": stack.name, "model": stack.model}
 
 
@@ -867,7 +888,7 @@ async def _pull_model(base: str, model: str) -> None:
         pull_state.update(status="done", percent=100)
     except (httpx.HTTPError, ValueError, RuntimeError) as e:
         logger.warning("panel.model_pull_failed", model=model, error=type(e).__name__)
-        pull_state.update(status="failed", error="Не удалось скачать модель. Проверьте имя и что Ollama запущена.")
+        pull_state.update(status="failed", error=tr("panel.pull_failed"))
 
 
 @app.post("/api/models/pull", dependencies=[Depends(require_session)])
@@ -875,9 +896,9 @@ async def pull_model(body: PullBody) -> dict[str, Any]:
     global _pull_task
     model = body.model.strip()
     if not stacks.MODEL_NAME_RE.match(model):
-        raise HTTPException(status_code=422, detail="Укажите имя модели, например gemma4:26b.")
+        raise HTTPException(status_code=422, detail=tr("panel.model_name_needed"))
     if pull_state["status"] == "running":
-        raise HTTPException(status_code=409, detail="Другая модель уже скачивается.")
+        raise HTTPException(status_code=409, detail=tr("panel.pull_busy"))
     pull_state.update(model=model, status="running", percent=0, error=None)
     base = settings.local_llm_url.rstrip("/").removesuffix("/v1")
     _pull_task = asyncio.create_task(_pull_model(base, model))
@@ -896,7 +917,7 @@ def main() -> None:
     """Run with:  python -m app.admin_panel"""
     configure_logging()
     if not settings.admin_panel_password:
-        raise SystemExit("Задайте ADMIN_PANEL_PASSWORD в .env: без пароля панель не запускается.")
+        raise SystemExit("Set ADMIN_PANEL_PASSWORD in .env: the panel does not start without a password.")
     uvicorn.run(app, host=settings.panel_host, port=settings.panel_port, log_level="warning")
 
 

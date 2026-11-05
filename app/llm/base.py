@@ -24,11 +24,13 @@ class BaseLLMClient(ABC):
         messages: list[BatchMessage],
         topics: list[TopicContext],
         older_topics: list[dict],
+        language: str = "en",
     ) -> ConversationAnalysis:
-        """Group a batch of messages into topics and extract what was said in them."""
+        """Group a batch of messages into topics and extract what was said in them.
+        `language` is the language of the text the model writes, not of the messages."""
         ...
 
     @abstractmethod
-    async def merge_summaries(self, fragments: dict[int, list[str]]) -> dict[int, str]:
+    async def merge_summaries(self, fragments: dict[int, list[str]], language: str = "en") -> dict[int, str]:
         """Rewrite each topic's summary fragments as one text, adding nothing new."""
         ...

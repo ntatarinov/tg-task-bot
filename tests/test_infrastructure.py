@@ -205,7 +205,7 @@ async def test_doctor_on_a_healthy_setup(doctor_db, monkeypatch, capsys):
     monkeypatch.setattr(doctor.httpx, "AsyncClient", Client)
 
     assert await doctor.main() == 0
-    assert "Всё готово к работе" in capsys.readouterr().out
+    assert "Everything is ready" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -228,9 +228,9 @@ async def test_doctor_reports_unreachable_telegram(monkeypatch):
 @pytest.mark.parametrize(
     "base_url, available, answer, failures, hint",
     [
-        ("http://localhost:11434/v1", True, None, 0, "локально"),
+        ("http://localhost:11434/v1", True, None, 0, "local"),
         ("http://localhost:11434/v1", False, None, 1, "ollama pull"),
-        ("http://localhost:11434/v1", True, LLMUnavailableError("down"), 1, "не ответила"),
+        ("http://localhost:11434/v1", True, LLMUnavailableError("down"), 1, "did not answer"),
     ],
 )
 @pytest.mark.asyncio
@@ -404,7 +404,9 @@ def test_bot_can_use_a_custom_api_server(monkeypatch, api_base):
 async def test_bot_commands_are_registered():
     from app.bot.commands import set_bot_commands
 
-    bot = SimpleNamespace(set_my_commands=AsyncMock())
+    bot = SimpleNamespace(
+        set_my_commands=AsyncMock(), set_my_description=AsyncMock(), set_my_short_description=AsyncMock()
+    )
     await set_bot_commands(bot)
 
     names = {c.command for c in bot.set_my_commands.call_args.args[0]}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -12,8 +13,9 @@ from app.config import settings
 from app.db.models import Chat, Task, TaskStatus
 from app.db.repositories import ChatRepository, TaskRepository
 from app.db.session import get_session
+from app.i18n import LANGUAGES, chat_language, normalize, t
 from app.utils.dashboard_auth import verify_chat_token, verify_master_token
-from app.utils.task_labels import PRIORITY_EMOJI, STATUS_LABELS
+from app.utils.task_labels import PRIORITY_EMOJI, status_labels
 
 router = APIRouter()
 
@@ -117,9 +119,22 @@ async def update_task_status(
     return _task_to_out(task)
 
 
+def _language_links(language: str, token: str) -> str:
+    """Links rather than a stored preference: the site has no sessions, only the token URL."""
+    links = []
+    for code in LANGUAGES:
+        if code == language:
+            links.append(f"<strong>{code.upper()}</strong>")
+        else:
+            query = html.escape(urlencode({"token": token, "lang": code}))
+            links.append(f'<a href="?{query}">{code.upper()}</a>')
+    return f'<nav class="languages">{" | ".join(links)}</nav>'
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     token: str = "",
+    lang: str = "",
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Read-only overview of all chats. Requires the master token once DASHBOARD_SECRET is set."""
@@ -127,6 +142,7 @@ async def dashboard(
     chat_repo = ChatRepository(session)
     task_repo = TaskRepository(session)
     chats = await chat_repo.get_all_active()
+    language = normalize(lang)
 
     blocks: list[str] = []
     for chat in chats:
@@ -142,19 +158,22 @@ async def dashboard(
             for t in tasks
         )
         title = html.escape(chat.title or f"chat {chat.telegram_chat_id}")
-        link = f'<a href="/dashboard/{chat.id}?token={token}">открыть</a>' if token else ""
+        empty_row = f"<tr><td colspan=5>{t(language, 'site.no_tasks')}</td></tr>"
+        link = f'<a href="/dashboard/{chat.id}?token={token}">{t(language, "site.open")}</a>' if token else ""
         blocks.append(
             f"<section><h2>{title} "
-            f"<small>({html.escape(chat.timezone)}, дайджест {html.escape(chat.digest_time)})</small> "
+            f"<small>({html.escape(chat.timezone)}, "
+            f"{t(language, 'site.digest_at', time=html.escape(chat.digest_time))})</small> "
             f"{link}</h2>"
-            f"<table><thead><tr><th>ID</th><th>Задача</th><th>Статус</th>"
-            f"<th>Приоритет</th><th>Исполнитель</th></tr></thead>"
-            f"<tbody>{rows or '<tr><td colspan=5>Задач нет</td></tr>'}</tbody></table></section>"
+            f"<table><thead><tr><th>ID</th><th>{t(language, 'site.col_task')}</th>"
+            f"<th>{t(language, 'site.col_status')}</th><th>{t(language, 'site.col_priority')}</th>"
+            f"<th>{t(language, 'site.col_assignee')}</th></tr></thead>"
+            f"<tbody>{rows or empty_row}</tbody></table></section>"
         )
 
-    body = "".join(blocks) or "<p>Активных чатов нет.</p>"
+    body = "".join(blocks) or f"<p>{t(language, 'site.no_chats')}</p>"
     page = f"""<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>Digest — Dashboard</title>
+<html lang="{language}"><head><meta charset="utf-8"><title>Digest — Dashboard</title>
 <style>
  body {{ font-family: system-ui, sans-serif; margin: 2rem; color: #222; }}
  h1 {{ margin-bottom: 1rem; }}
@@ -164,7 +183,7 @@ async def dashboard(
  th {{ background: #f4f4f4; }}
  small {{ color: #777; font-weight: normal; }}
 </style></head>
-<body><h1>📋 Digest — задачи по чатам</h1>{body}</body></html>"""
+<body>{_language_links(language, token)}<h1>📋 {t(language, 'site.overview')}</h1>{body}</body></html>"""
     return HTMLResponse(content=page)
 
 
@@ -174,7 +193,7 @@ def _safe_script_json(obj: object) -> str:
     return json.dumps(obj, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
-def _render_chat_dashboard(chat: Chat, tasks: list[Task], token: str) -> str:
+def _render_chat_dashboard(chat: Chat, tasks: list[Task], token: str, language: str) -> str:
     task_payload = [
         {
             "id": t.id,
@@ -188,16 +207,31 @@ def _render_chat_dashboard(chat: Chat, tasks: list[Task], token: str) -> str:
         for t in tasks
     ]
     title = html.escape(chat.title or f"chat {chat.telegram_chat_id}")
-    status_labels_json = _safe_script_json(STATUS_LABELS)
+    status_labels_json = _safe_script_json(status_labels(language))
+    text_json = _safe_script_json(
+        {
+            "active": t(language, "site.filter_active"),
+            "all": t(language, "site.filter_all"),
+            "done": t(language, "site.filter_done"),
+            "cancelled": t(language, "site.filter_cancelled"),
+            "reopen": t(language, "button.reopen"),
+            "progress": t(language, "button.progress"),
+            "finish": t(language, "button.done"),
+            "cancel": t(language, "button.cancel"),
+            "reporter": t(language, "task.reporter", name=""),
+            "assignee": t(language, "task.assignee", name=""),
+            "updateFailed": t(language, "site.update_failed"),
+        }
+    )
     priority_emoji_json = _safe_script_json(PRIORITY_EMOJI)
     tasks_json = _safe_script_json(task_payload)
 
     return f"""<!doctype html>
-<html lang="ru">
+<html lang="{language}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — задачи</title>
+<title>{t(language, "site.tasks_title", title=title)}</title>
 <style>
   :root {{ color-scheme: light dark; }}
   * {{ box-sizing: border-box; }}
@@ -214,6 +248,7 @@ def _render_chat_dashboard(chat: Chat, tasks: list[Task], token: str) -> str:
     .filters button.active {{ background: #3a7afe !important; color: #fff !important; }}
   }}
   h1 {{ font-size: 1.25rem; margin: 0.25rem 0 1rem; }}
+  .languages {{ font-size: 0.85rem; text-align: right; }}
   .filters {{ display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }}
   .filters button {{
     border: 1px solid #ddd; background: #fff; border-radius: 999px;
@@ -240,15 +275,17 @@ def _render_chat_dashboard(chat: Chat, tasks: list[Task], token: str) -> str:
 </style>
 </head>
 <body>
+{_language_links(language, token)}
 <h1>📋 {title}</h1>
 <div class="filters" id="filters"></div>
 <div id="list"></div>
-<div class="empty" id="empty" hidden>Ничего не найдено</div>
+<div class="empty" id="empty" hidden>{t(language, "site.nothing_found")}</div>
 
 <script>
 const CHAT_ID = {chat.id};
 const TOKEN = {json.dumps(token)};
 const STATUS_LABELS = {status_labels_json};
+const TEXT = {text_json};
 const PRIORITY_EMOJI = {priority_emoji_json};
 let tasks = {tasks_json};
 let currentFilter = "active";
@@ -263,10 +300,10 @@ function esc(s) {{
 
 function renderFilters() {{
   const groups = [
-    ["active", "Активные"],
-    ["all", "Все"],
-    ["done", "Готово"],
-    ["cancelled", "Отменено"],
+    ["active", TEXT.active],
+    ["all", TEXT.all],
+    ["done", TEXT.done],
+    ["cancelled", TEXT.cancelled],
   ];
   const el = document.getElementById("filters");
   el.innerHTML = groups.map(([key, label]) =>
@@ -283,12 +320,12 @@ function renderFilters() {{
 
 function actionsFor(task) {{
   if (task.status === "done" || task.status === "cancelled") {{
-    return [["new", "🔄 Возобновить", "btn-reopen"]];
+    return [["new", TEXT.reopen, "btn-reopen"]];
   }}
   return [
-    ["in_progress", "🔄 В работу", "btn-progress"],
-    ["done", "✔️ Готово", "btn-done"],
-    ["cancelled", "❌ Отмена", "btn-cancel"],
+    ["in_progress", TEXT.progress, "btn-progress"],
+    ["done", TEXT.finish, "btn-done"],
+    ["cancelled", TEXT.cancel, "btn-cancel"],
   ];
 }}
 
@@ -310,8 +347,8 @@ function renderList() {{
     <div class="card" id="task-${{t.id}}">
       <h3>${{PRIORITY_EMOJI[t.priority] || ""}} ${{esc(t.title)}}</h3>
       <div class="status">${{STATUS_LABELS[t.status] || esc(t.status)}}</div>
-      ${{t.reporter ? `<div class="meta">🙋 От: ${{esc(t.reporter)}}</div>` : ""}}
-      ${{t.assignee ? `<div class="meta">👤 Исполнитель: ${{esc(t.assignee)}}</div>` : ""}}
+      ${{t.reporter ? `<div class="meta">${{esc(TEXT.reporter)}}${{esc(t.reporter)}}</div>` : ""}}
+      ${{t.assignee ? `<div class="meta">${{esc(TEXT.assignee)}}${{esc(t.assignee)}}</div>` : ""}}
       ${{t.deadline ? `<div class="meta">📅 ${{esc(t.deadline)}}</div>` : ""}}
       <div class="actions">
         ${{actionsFor(t).map(([status, label, cls]) =>
@@ -332,7 +369,7 @@ async function updateStatus(taskId, status) {{
     body: JSON.stringify({{ status }}),
   }});
   if (!res.ok) {{
-    alert("Не удалось обновить статус");
+    alert(TEXT.updateFailed);
     return;
   }}
   const updated = await res.json();
@@ -351,9 +388,10 @@ renderList();
 async def chat_dashboard(
     chat_id: int,
     token: str = "",
+    lang: str = "",
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """Interactive per-chat task list opened from the bot's '🌐 Открыть на сайте' button."""
+    """Interactive per-chat task list opened from the bot's site button."""
     _require_chat_token(chat_id, token)
     chat_repo = ChatRepository(session)
     chat = await chat_repo.get_by_id(chat_id)
@@ -362,4 +400,5 @@ async def chat_dashboard(
 
     task_repo = TaskRepository(session)
     tasks = await task_repo.get_all_for_chat(chat_id)
-    return HTMLResponse(content=_render_chat_dashboard(chat, tasks, token))
+    language = lang if lang in LANGUAGES else chat_language(chat)
+    return HTMLResponse(content=_render_chat_dashboard(chat, tasks, token, language))

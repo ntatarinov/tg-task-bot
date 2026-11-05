@@ -1,154 +1,156 @@
-# Развёртывание Digest на сервере
+# Deploying Digest on a server
 
-Digest — Telegram-бот, который разбирает рабочие чаты и присылает дайджесты. Инструкция описывает
-установку на Linux-сервер из готового архива.
+**English** | [Русский](DEPLOY.ru.md)
 
-## Что будет работать
+Digest is a Telegram bot that analyzes work chats and sends digests. This guide describes
+installing it on a Linux server from a ready-made archive.
 
-| Контейнер | Назначение | Порты |
+## What will run
+
+| Container | Purpose | Ports |
 |---|---|---|
-| `bot` | Получает сообщения (long polling), анализ, отчёты | Только исходящие |
-| `ollama` | Локальная ИИ-модель | Только внутри сети Docker |
-| `panel` | Панель управления | `127.0.0.1:8090` |
-| `model-pull` | Скачивает модель и завершается | — |
+| `bot` | Receives messages (long polling), analysis, reports | Outbound only |
+| `ollama` | Local AI model | Inside the Docker network only |
+| `panel` | Control panel | `127.0.0.1:8090` |
+| `model-pull` | Downloads the model and exits | — |
 
-База SQLite лежит в `./data`, настройки в `./.env`. Postgres и Redis не нужны.
+The SQLite database is in `./data`, the settings are in `./.env`. Postgres and Redis are not needed.
 
-## Требования
+## Requirements
 
-| | Минимум |
+| | Minimum |
 |---|---|
-| ОС | Linux x86_64 с `sh`, `curl`, `unzip` |
-| ОЗУ | 32 ГБ, рекомендуется 64 ГБ |
-| Диск | 50 ГБ |
-| Процессор | 8 потоков |
-| Видеокарта | Не обязательна. С NVIDIA нужен NVIDIA Container Toolkit, `install.sh` найдёт её сам |
+| OS | Linux x86_64 with `sh`, `curl`, `unzip` |
+| RAM | 32 GB, 64 GB recommended |
+| Disk | 50 GB |
+| CPU | 8 threads |
+| GPU | Optional. NVIDIA requires the NVIDIA Container Toolkit; `install.sh` detects the card itself |
 
-**Сеть.** Входящие порты не нужны, кроме SSH. Исходящий доступ по 443 нужен к `api.telegram.org`
-постоянно, а к Docker Hub, `pypi.org` и `registry.ollama.ai` на время установки.
+**Network.** No inbound ports are needed except SSH. Outbound access on 443 is needed to `api.telegram.org`
+at all times, and to Docker Hub, `pypi.org` and `registry.ollama.ai` during installation.
 
-## Установка
+## Installation
 
-Вы получите архив `digest-bot-<дата>.zip`. **В нём токен бота и вся сохранённая переписка.** Передавайте его
-только по защищённому каналу и удалите после установки.
+You will receive an archive `digest-bot-<date>.zip`. **It contains the bot token and all stored conversations.** Send it
+only over a secure channel and delete it after installing.
 
-1. Остановите бота на прежнем компьютере: с одним токеном могут работать только один экземпляр.
-2. Установите:
+1. Stop the bot on the previous computer: only one instance can run with one token.
+2. Install:
 
 ```bash
 unzip digest-bot-*.zip -d digest-bot && cd digest-bot
 sh install.sh
 ```
 
-Скрипт ставит Docker, если его нет, выставляет права `600` на `.env`, создаёт пароль панели и выводит его,
-скачивает модель, обновляет базу и запускает проверку. Первый запуск занимает несколько минут.
+The script installs Docker if it is missing, sets permissions `600` on `.env`, creates the panel password and prints it,
+downloads the model, updates the database and runs the check. The first run takes several minutes.
 
-Другой вариант: `sh install.sh cloud` запускает бота без локальной модели. Модель тогда берётся из настроек
-`.env`, это внешний сервис, и нужен `LLM_EXTERNAL_ALLOWED=true` с разрешения владельца данных.
+Another option: `sh install.sh cloud` runs the bot without a local model. The model then comes from the settings
+in `.env`; this is an external service and requires `LLM_EXTERNAL_ALLOWED=true` with the data owner's permission.
 
-3. Убедитесь, что проверка в конце показала «Всё готово к работе». Повторить её можно так:
+3. Make sure the check at the end shows "Everything is ready." You can repeat it like this:
 
 ```bash
 docker compose -f docker-compose.selfhost.yml exec bot python -m app.doctor
 ```
 
-## Панель управления
+## Control panel
 
-Панель открыта только на `127.0.0.1` сервера. **Не публикуйте порт 8090 и не ставьте его за внешний прокси:**
-панель меняет токены и настройки. С рабочего компьютера подключайтесь через SSH-туннель:
+The panel is open only on the server's `127.0.0.1`. **Do not publish port 8090 and do not put it behind an external proxy:**
+the panel changes tokens and settings. From your work computer, connect through an SSH tunnel:
 
 ```bash
-ssh -L 8090:127.0.0.1:8090 <пользователь>@<сервер>
+ssh -L 8090:127.0.0.1:8090 <user>@<server>
 ```
 
-Затем откройте http://localhost:8090. Пароль лежит в `.env`, в строке `ADMIN_PANEL_PASSWORD`.
+Then open http://localhost:8090. The password is in `.env`, on the `ADMIN_PANEL_PASSWORD` line.
 
-В панели можно проверить систему и модель на тестовой переписке, переключить вариант модели, изменить настройки,
-разрешить и запретить чаты, перезапустить бота. Бот перезапускается сам: панель создаёт файл-флаг, бот завершается,
-а Docker поднимает его снова. Доступа к Docker у панели нет.
+In the panel you can check the system and the model on a test conversation, switch the model option, change settings,
+allow and block chats, and restart the bot. The bot restarts itself: the panel creates a flag file, the bot exits,
+and Docker brings it back up. The panel has no access to Docker.
 
-## Обслуживание
+## Maintenance
 
-Команды ниже даны для `docker-compose.selfhost.yml`. С видеокартой добавляйте `-f docker-compose.gpu.yml`.
+The commands below are for `docker-compose.selfhost.yml`. With a GPU, add `-f docker-compose.gpu.yml`.
 
 ```bash
-# Логи и состояние
+# Logs and status
 docker compose -f docker-compose.selfhost.yml logs -f bot
 docker compose -f docker-compose.selfhost.yml ps
 
-# Остановка и запуск
+# Stop and start
 docker compose -f docker-compose.selfhost.yml down
 docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-В логах нет текста сообщений и токенов. Контейнеры сами поднимаются после перезагрузки сервера.
+Logs contain no message text and no tokens. Containers come back up on their own after a server reboot.
 
-### Резервная копия
+### Backup
 
-Сохраняйте `data/backup.db` и `.env` в защищённое место. В них переписка и токены.
+Save `data/backup.db` and `.env` to a secure place. They contain the conversations and tokens.
 
 ```bash
 docker compose -f docker-compose.selfhost.yml exec -T bot python -c "import sqlite3; s=sqlite3.connect('/data/bot.db'); d=sqlite3.connect('/data/backup.db'); s.backup(d); d.close()"
 ```
 
-Команда безопасна для работающего бота. Копирование файла `bot.db` напрямую использовать нельзя: часть данных
-лежит в `bot.db-wal`.
+This command is safe while the bot is running. Do not copy the `bot.db` file directly: part of the data
+is in `bot.db-wal`.
 
-### Восстановление
+### Restore
 
 ```bash
 docker compose -f docker-compose.selfhost.yml down
 rm -f data/bot.db-wal data/bot.db-shm
-cp <копия> data/bot.db
+cp <copy> data/bot.db
 docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-### Обновление
+### Update
 
-Соберите архив без данных (`python -m app.bundle --code-only`), распакуйте поверх текущей папки и запустите
-установку. `.env` и `data/` при этом не меняются.
+Build an archive without data (`python -m app.bundle --code-only`), unpack it over the current folder and run
+the installation. `.env` and `data/` are not changed.
 
 ```bash
 unzip -o digest-bot-*.zip -d digest-bot && cd digest-bot
 sh install.sh
 ```
 
-Если схема базы меняется, перед обновлением автоматически создаётся `data/bot.db.bak-<дата>`.
-Такие копии содержат переписку и не удаляются сами: уберите их, когда обновление подтвердится.
+If the database schema changes, `data/bot.db.bak-<date>` is created automatically before the update.
+These copies contain the conversations and are not deleted automatically: remove them once the update is confirmed.
 
-**Откат:** распакуйте предыдущий архив, восстановите базу из копии и запустите `sh install.sh`.
+**Rollback:** unpack the previous archive, restore the database from the copy and run `sh install.sh`.
 
-### Переезд на другой хостинг
+### Moving to another host
 
-Раздел «Перенос» в панели скачивает архив с кодом, настройками и данными, для этого нужно снова ввести пароль.
-Остановите бота на старом сервере и установите архив на новом так же, как при первой установке.
-Затем в разделе «Настройка» нажмите «Где сейчас бот»: разрешите нужные чаты и запретите лишние.
-Если на новом стенде другой бот, сначала вставьте его токен и добавьте его в группы.
+The **Move** section of the panel downloads an archive with the code, settings and data; this requires entering the password again.
+Stop the bot on the old server and install the archive on the new one the same way as the first installation.
+Then, in the **Setup** section, click **Where is the bot**: allow the chats you need and block the rest.
+If the new instance uses a different bot, first paste its token and add it to the groups.
 
-### Смена модели
+### Changing the model
 
-Удобнее всего через панель: раздел «Проверка» покажет результат на тестовой переписке, а в разделе «Настройка»
-можно выбрать и скачать модель. Полная проверка качества на синтетических сценариях:
+The panel is the easiest way: the **Check** section shows the result on a test conversation, and in the **Setup** section
+you can select and download a model. Full quality check on synthetic scenarios:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml exec bot python scripts/eval_llm.py --model <имя> --pause 0 --large 3
+docker compose -f docker-compose.selfhost.yml exec bot python scripts/eval_llm.py --model <name> --pause 0 --large 3
 ```
 
-Для моделей с рассуждениями, таких как `gemma4`, оставляйте `LLM_REASONING_EFFORT=none`.
+For reasoning models such as `gemma4`, keep `LLM_REASONING_EFFORT=none`.
 
-## Безопасность
+## Security
 
-- Переписка не покидает сервер: модель работает локально. Сервер принадлежит хостеру, поэтому его выбор нужно согласовать с владельцем данных.
-- Срок хранения задаётся в панели, по умолчанию данные хранятся бессрочно.
-- Бот работает только в чатах из `ALLOWED_CHAT_IDS`.
-- Пароль панели длинный и случайный. Сменить его можно в `.env`, после чего выполнить `docker compose -f docker-compose.selfhost.yml up -d --force-recreate panel`.
+- Conversations do not leave the server: the model runs locally. The server belongs to the hosting provider, so the choice of provider must be agreed with the data owner.
+- The retention period is set in the panel; by default data is kept forever.
+- The bot works only in chats from `ALLOWED_CHAT_IDS`.
+- The panel password is long and random. You can change it in `.env`, then run `docker compose -f docker-compose.selfhost.yml up -d --force-recreate panel`.
 
-## Что не проверялось
+## What has not been verified
 
-На момент подготовки инструкции Docker на машине разработки был выключен, поэтому первая установка может потребовать правок:
+When this guide was prepared, Docker on the development machine was off, so the first installation may need fixes:
 
-- Образ не собирался целиком, контейнеры не запускались. Проверены формат compose-файлов, синтаксис `install.sh`, шаг `pip install` и запуск бота и панели без Docker.
-- Работа с настоящим Telegram не проверялась.
-- Скорость модели измерена на настольном ПК с видеокартой на 8 ГБ. На сервере без видеокарты она будет ниже, один пакет может занимать несколько минут.
+- The image was not built in full and the containers were not run. Verified: the format of the compose files, the syntax of `install.sh`, the `pip install` step, and running the bot and the panel without Docker.
+- Work with real Telegram was not tested.
+- Model speed was measured on a desktop PC with an 8 GB GPU. On a server without a GPU it will be lower; one batch may take several minutes.
 
-`docker-compose.yml` и `docker-compose.prod.yml` с Postgres относятся к прежней схеме развёртывания и не проверялись. Используйте варианты из этой инструкции.
+`docker-compose.yml` and `docker-compose.prod.yml` with Postgres belong to the previous deployment scheme and were not tested. Use the options from this guide.

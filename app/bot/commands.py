@@ -1,28 +1,31 @@
 from __future__ import annotations
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BotCommand
+
+from app.i18n import FALLBACK_LANGUAGE, LANGUAGES, t
+from app.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+COMMANDS = (
+    "start", "help", "tasks", "digest", "task", "clarify", "settings", "status", "chatid",
+    "set_timezone", "set_digest_time", "set_weekly", "set_digest_chat", "digest_on", "digest_off",
+    "language", "reanalyze", "purge_history", "pin_dashboard",
+)
 
 
 async def set_bot_commands(bot: Bot) -> None:
-    commands = [
-        BotCommand(command="start", description="Описание бота"),
-        BotCommand(command="help", description="Список команд"),
-        BotCommand(command="tasks", description="Показать активные задачи"),
-        BotCommand(command="digest", description="Дайджест: /digest [today|yesterday|week|3d|дата дата]"),
-        BotCommand(command="task", description="Создать задачу вручную: /task <текст>"),
-        BotCommand(command="clarify", description="Задачи, требующие уточнения"),
-        BotCommand(command="settings", description="Настройки чата"),
-        BotCommand(command="status", description="Состояние анализа"),
-        BotCommand(command="chatid", description="Показать ID чата (для администраторов)"),
-        BotCommand(command="set_timezone", description="Часовой пояс: /set_timezone <TZ>"),
-        BotCommand(command="set_digest_time", description="Время дайджеста: /set_digest_time <HH:MM>"),
-        BotCommand(command="set_weekly", description="Еженедельный дайджест: /set_weekly <пн..вс|off>"),
-        BotCommand(command="set_digest_chat", description="Куда слать отчёты: /set_digest_chat <id|here>"),
-        BotCommand(command="digest_on", description="Включить дайджест в этом чате"),
-        BotCommand(command="digest_off", description="Выключить дайджест в этом чате"),
-        BotCommand(command="reanalyze", description="Повторить анализ: /reanalyze <дней>"),
-        BotCommand(command="purge_history", description="Удалить историю: /purge_history <дней> confirm"),
-        BotCommand(command="pin_dashboard", description="Закрепить ссылку на сайт с задачами"),
-    ]
-    await bot.set_my_commands(commands)
+    """Telegram shows each person the version for their app language. The one without a
+    language code is what everyone else sees, so English goes there."""
+    for language in LANGUAGES:
+        code = None if language == FALLBACK_LANGUAGE else language
+        commands = [BotCommand(command=name, description=t(language, f"cmd.{name}")) for name in COMMANDS]
+        await bot.set_my_commands(commands, language_code=code)
+        try:
+            await bot.set_my_description(t(language, "bot.description"), language_code=code)
+            await bot.set_my_short_description(t(language, "bot.short_description"), language_code=code)
+        except TelegramAPIError as e:
+            # Only the profile text: not worth keeping the bot from starting.
+            logger.warning("bot.description_failed", language=language, error=type(e).__name__)

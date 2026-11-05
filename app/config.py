@@ -46,6 +46,8 @@ class Settings(BaseSettings):
 
     # App
     app_env: str = "local"
+    # en or ru: for every chat that has not chosen its own language with /language.
+    default_language: str = "en"
     default_timezone: str = "Asia/Almaty"
     default_digest_time: str = "18:00"
 

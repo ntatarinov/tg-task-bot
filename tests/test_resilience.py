@@ -182,7 +182,7 @@ async def test_failed_messages_are_reported_in_the_digest(session, monkeypatch):
     digest = await DigestService(session, ScriptedLLM({"topics": []})).build_digest(
         chat, BASE_TIME - timedelta(hours=1), BASE_TIME + timedelta(hours=1)
     )
-    assert "Не удалось проанализировать сообщений: 1" in digest.text
+    assert "Messages that could not be analyzed: 1" in digest.text
 
 
 @pytest.mark.asyncio
@@ -219,7 +219,7 @@ async def test_flush_stops_at_outage_and_digest_says_what_is_missing(session):
     digest = await DigestService(session, llm).build_digest(
         chat, BASE_TIME - timedelta(hours=1), BASE_TIME + timedelta(hours=1)
     )
-    assert "Ещё не проанализировано сообщений: 1" in digest.text
+    assert "Messages not analyzed yet: 1" in digest.text
 
 
 @pytest.mark.asyncio
@@ -453,7 +453,7 @@ async def test_scheduled_digest_is_sent_once(session):
     await run_scheduled_digest(bot, session, llm, chat, "daily", "2026-11-04")
     await run_scheduled_digest(bot, session, llm, chat, "daily", "2026-11-04")
 
-    digests = [m for m in bot.sent if "дайджест" in m["text"]]
+    digests = [m for m in bot.sent if "digest" in m["text"]]
     assert len(digests) == 1
     assert "Сделать работу" in digests[0]["text"]
     assert digests[0]["chat_id"] == chat.telegram_chat_id
@@ -505,8 +505,8 @@ async def test_daily_and_weekly_are_independent_slots(session):
     await run_scheduled_digest(bot, session, llm, chat, "daily", "2026-11-06")
     await run_scheduled_digest(bot, session, llm, chat, "weekly", "2026-W45")
 
-    assert "Ежедневный дайджест" in bot.sent[0]["text"]
-    assert "Еженедельный дайджест" in bot.sent[1]["text"]
+    assert "Daily digest" in bot.sent[0]["text"]
+    assert "Weekly digest" in bot.sent[1]["text"]
 
 
 @pytest.mark.asyncio

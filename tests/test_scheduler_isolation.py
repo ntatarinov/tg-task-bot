@@ -89,5 +89,5 @@ async def test_disabled_digest_and_weekly_day_are_respected(tick_env, monkeypatc
     await scheduler.digest_tick()
 
     titles = [m["text"].split(" — ")[0] for m in bot.sent]
-    assert titles == ["<b>Ежедневный дайджест", "<b>Еженедельный дайджест"]
+    assert titles == ["<b>Daily digest", "<b>Weekly digest"]
     assert {m["chat_id"] for m in bot.sent} == {FIRST}

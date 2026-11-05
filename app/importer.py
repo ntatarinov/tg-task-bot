@@ -99,7 +99,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     if args.chat_id not in settings.allowed_chats:
-        raise SystemExit(f"Чата {args.chat_id} нет в ALLOWED_CHAT_IDS")
+        raise SystemExit(f"Chat {args.chat_id} is not in ALLOWED_CHAT_IDS")
 
     export = json.loads(args.path.read_text(encoding="utf-8"))
     imported, skipped = await import_export(export, args.chat_id, analyze=not args.no_analyze)

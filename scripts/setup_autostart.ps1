@@ -15,5 +15,5 @@ $shortcut.WorkingDirectory = $scriptDir
 $shortcut.Description = "Tg Task Bot: bot + dashboard + ngrok tunnel"
 $shortcut.Save()
 
-Write-Host "Готово: ярлык автозапуска создан здесь:" -ForegroundColor Green
+Write-Host "Done: the autostart shortcut was created here:" -ForegroundColor Green
 Write-Host $shortcutPath

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app import i18n
 from app.llm.base import BaseLLMClient
 from app.llm.schemas import (
     BatchMessage,
@@ -26,8 +27,6 @@ NOISE_PATTERNS = [
     r"^\+\d*$",
     r"^(ок|окей|ладно|хорошо|понял|спасибо|thanks|ok|lol|😂|👍)+$",
 ]
-
-MOCK_TOPIC_TITLE = "Рабочие задачи"
 
 
 def _is_noise(text: str) -> bool:
@@ -61,6 +60,7 @@ class MockLLMClient(BaseLLMClient):
         messages: list[BatchMessage],
         topics: list[TopicContext],
         older_topics: list[dict],
+        language: str = "en",
     ) -> ConversationAnalysis:
         logger.debug("mock_llm.analyze_conversation", messages=len(messages))
         items: list[ExtractedItem] = []
@@ -80,18 +80,19 @@ class MockLLMClient(BaseLLMClient):
         if not items:
             return ConversationAnalysis()
 
-        known = next((t for t in topics if t.title == MOCK_TOPIC_TITLE), None)
+        title = i18n.t(language, "mock.topic")
+        known = next((t for t in topics if t.title == title), None)
         return ConversationAnalysis(
             topics=[
                 ExtractedTopic(
                     topic_id=known.id if known else None,
-                    title=MOCK_TOPIC_TITLE,
-                    summary=f"Выявлено задач: {len(items)}.",
+                    title=title,
+                    summary=i18n.t(language, "mock.summary", count=len(items)),
                     message_ids=[i for item in items for i in item.source_ids],
                     items=items,
                 )
             ]
         )
 
-    async def merge_summaries(self, fragments: dict[int, list[str]]) -> dict[int, str]:
+    async def merge_summaries(self, fragments: dict[int, list[str]], language: str = "en") -> dict[int, str]:
         return {topic_id: " ".join(parts) for topic_id, parts in fragments.items()}

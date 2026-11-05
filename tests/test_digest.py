@@ -50,18 +50,18 @@ async def test_digest_follows_the_requested_structure(session):
     await analyze(session, chat, llm)
     text = await _digest_of(session, chat, llm)
 
-    assert "<b>Ежедневный дайджест — 04.11.2026</b>" in text
-    assert "<b>Тема 1. Security Baseline</b>" in text
-    assert "Обсудили: Обсудили политику паролей." in text
-    assert "Принятые решения:" in text and "Длина пароля 14 символов" in text
-    assert "Подготовить GPO" in text and "срок: 2026-11-06" in text
-    assert "Ответственные: Виктор" in text
-    assert "Открытые вопросы:" in text and "Кто согласует с ИБ?" in text
-    assert "<b>Общие итоги дня</b>" in text
-    assert "Что решили:" in text
-    assert "Что необходимо сделать:" in text
-    assert "Кто за что отвечает:" in text
-    assert "Какие вопросы остались нерешёнными:" in text
+    assert "<b>Daily digest — 04.11.2026</b>" in text
+    assert "<b>Topic 1. Security Baseline</b>" in text
+    assert "Discussed: Обсудили политику паролей." in text
+    assert "Decisions:" in text and "Длина пароля 14 символов" in text
+    assert "Подготовить GPO" in text and "deadline: 2026-11-06" in text
+    assert "Owners: Виктор" in text
+    assert "Open questions:" in text and "Кто согласует с ИБ?" in text
+    assert "<b>Summary of the day</b>" in text
+    assert "What was decided:" in text
+    assert "What needs to be done:" in text
+    assert "Who owns what:" in text
+    assert "What is still unresolved:" in text
 
 
 @pytest.mark.asyncio
@@ -74,9 +74,9 @@ async def test_unknowns_are_stated_not_invented(session):
     await analyze(session, chat, llm)
     text = await _digest_of(session, chat, llm)
 
-    assert "срок: Не определено" in text
-    assert "Ответственные: Не определено" in text
-    assert "Принятые решения: нет подтверждённых решений" in text
+    assert "deadline: Not defined" in text
+    assert "Owners: Not defined" in text
+    assert "Decisions: no confirmed decisions" in text
 
 
 @pytest.mark.asyncio
@@ -89,8 +89,8 @@ async def test_proposal_is_never_listed_as_a_decision(session):
     await analyze(session, chat, llm)
     text = await _digest_of(session, chat, llm)
 
-    assert "Предложения (не приняты):" in text
-    assert "Принятые решения: нет подтверждённых решений" in text
+    assert "Proposals (not accepted):" in text
+    assert "Decisions: no confirmed decisions" in text
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_changed_decision_shows_only_the_new_one_and_what_it_replaces(sess
     text = await _digest_of(session, chat, llm)
 
     assert "Релиз 17 ноября" in text
-    assert "(заменяет: Релиз 10 ноября)" in text
+    assert "(replaces: Релиз 10 ноября)" in text
     assert text.count("Релиз 10 ноября") == 1
 
 
@@ -187,7 +187,7 @@ async def test_digest_survives_model_outage_while_merging(session):
     await analyze(session, chat, llm)
 
     class Down(ScriptedLLM):
-        async def merge_summaries(self, fragments):
+        async def merge_summaries(self, fragments, language="en"):
             raise LLMUnavailableError("down")
 
     text = await _digest_of(session, chat, Down({"topics": []}))
@@ -211,7 +211,7 @@ async def test_user_text_cannot_inject_html(session):
 @pytest.mark.asyncio
 async def test_no_topics_is_said_plainly(session):
     chat = await make_chat(session)
-    assert "За период рабочих тем не выявлено." in await _digest_of(session, chat, ScriptedLLM({"topics": []}))
+    assert "No work topics found for this period." in await _digest_of(session, chat, ScriptedLLM({"topics": []}))
 
 
 @pytest.mark.asyncio

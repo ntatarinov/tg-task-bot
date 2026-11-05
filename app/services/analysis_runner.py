@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.utils import safe_send_message
 from app.config import settings
 from app.db.models import Chat
+from app.i18n import chat_language, t
 from app.llm.base import BaseLLMClient, LLMUnavailableError
 from app.llm.openai_client import llm_block_reason
 from app.services.clarification_service import ClarificationService
@@ -30,7 +31,7 @@ async def send_followups(bot: Bot | None, session: AsyncSession, chat: Chat, res
         sent = await safe_send_message(
             bot,
             chat.telegram_chat_id,
-            format_clarification_question(result.clarification.question),
+            format_clarification_question(result.clarification.question, chat_language(chat)),
             parse_mode=None,
         )
         # Remember which Telegram message carried the question so a reply to it
@@ -46,7 +47,12 @@ async def send_followups(bot: Bot | None, session: AsyncSession, chat: Chat, res
         await safe_send_message(
             bot,
             notify.telegram_user_id,
-            f"🔔 Тебе назначена задача: {notify.task_title} (чат: {notify.chat_title})",
+            t(
+                chat_language(chat),
+                "bot.assigned",
+                task=notify.task_title,
+                chat=notify.chat_title,
+            ),
             parse_mode=None,
         )
 
