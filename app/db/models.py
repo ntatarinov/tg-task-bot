@@ -75,6 +75,8 @@ class Chat(Base):
     title: Mapped[Optional[str]] = mapped_column(String(255))
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Almaty")
     digest_time: Mapped[str] = mapped_column(String(5), default="18:00")
+    # NULL follows DEFAULT_LANGUAGE, so changing that reaches every chat without its own choice.
+    language: Mapped[Optional[str]] = mapped_column(String(8))
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     weekly_digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 0 = Monday ... 6 = Sunday
@@ -243,7 +245,7 @@ class Topic(Base):
 
 
 class TopicUpdate(Base):
-    """What one analysis batch said about a topic — the raw material for "Обсудили"."""
+    """What one analysis batch said about a topic — the raw material for "Discussed"."""
 
     __tablename__ = "topic_updates"
 

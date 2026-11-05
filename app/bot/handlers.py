@@ -22,6 +22,7 @@ from app.config import settings
 from app.db.models import Task, TaskPriority, TaskStatus
 from app.db.repositories import ChatRepository, MessageRepository, TaskRepository
 from app.db.session import async_session_factory
+from app.i18n import LANGUAGE_NAMES, LANGUAGES, chat_language, normalize, t
 from app.llm.openai_client import create_llm_client, is_local_endpoint, llm_block_reason
 from app.services.analysis_runner import flush_pending
 from app.services.clarification_service import ClarificationService
@@ -34,8 +35,8 @@ from app.utils.logging import get_logger
 from app.utils.periods import parse_period
 from app.utils.task_labels import (
     PRIORITY_EMOJI,
-    STATUS_LABELS,
     TASK_ACTIONS,
+    status_labels,
 )
 from app.utils.time import is_valid_digest_time, is_valid_timezone, now_utc
 
@@ -48,8 +49,11 @@ router.edited_message.outer_middleware(_access)
 router.callback_query.outer_middleware(_access)
 
 DIGEST_TIME_PRESETS = ("18:00", "20:00", "21:00", "23:00")
-WEEKDAYS = {"пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6}
-WEEKDAY_NAMES = {index: name for name, index in WEEKDAYS.items()}
+# Both spellings work whatever language the chat is set to.
+WEEKDAYS = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+    "пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6,
+}
 
 # Attachments worth recording even without a caption. Service events
 # (joins, pins, title changes) are not conversation and are not stored.
@@ -73,47 +77,47 @@ def _make_llm():
     )
 
 
-def _task_block_text(task: Task) -> str:
+def _task_block_text(task: Task, lang: str) -> str:
     prio = PRIORITY_EMOJI.get(task.priority.value, "")
-    status = STATUS_LABELS.get(task.status.value, task.status.value)
+    status = status_labels(lang).get(task.status.value, task.status.value)
     lines = [f"{prio} *{task.title}*", status]
     if task.reporter_text:
-        lines.append(f"🙋 От: {task.reporter_text}")
+        lines.append(t(lang, "task.reporter", name=task.reporter_text))
     if task.assignee_text:
-        lines.append(f"👤 Исполнитель: {task.assignee_text}")
+        lines.append(t(lang, "task.assignee", name=task.assignee_text))
     if task.deadline:
         lines.append(f"📅 {task.deadline}")
     return "\n".join(lines)
 
 
-def _task_keyboard(task_id: int, status: TaskStatus) -> InlineKeyboardMarkup:
+def _task_keyboard(task_id: int, status: TaskStatus, lang: str) -> InlineKeyboardMarkup:
     if status in (TaskStatus.done, TaskStatus.cancelled):
-        rows = [[InlineKeyboardButton(text="🔄 Возобновить", callback_data=f"task:{task_id}:reopen")]]
+        rows = [[InlineKeyboardButton(text=t(lang, "button.reopen"), callback_data=f"task:{task_id}:reopen")]]
     else:
         rows = [
             [
-                InlineKeyboardButton(text="🔄 В работу", callback_data=f"task:{task_id}:progress"),
-                InlineKeyboardButton(text="✔️ Готово", callback_data=f"task:{task_id}:done"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data=f"task:{task_id}:cancel"),
+                InlineKeyboardButton(text=t(lang, "button.progress"), callback_data=f"task:{task_id}:progress"),
+                InlineKeyboardButton(text=t(lang, "button.done"), callback_data=f"task:{task_id}:done"),
+                InlineKeyboardButton(text=t(lang, "button.cancel"), callback_data=f"task:{task_id}:cancel"),
             ]
         ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _main_menu_keyboard(internal_chat_id: int | None = None) -> InlineKeyboardMarkup:
+def _main_menu_keyboard(lang: str, internal_chat_id: int | None = None) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(text="📋 Задачи", callback_data="menu:tasks"),
-            InlineKeyboardButton(text="📊 Дайджест", callback_data="menu:digest"),
+            InlineKeyboardButton(text=t(lang, "menu.tasks"), callback_data="menu:tasks"),
+            InlineKeyboardButton(text=t(lang, "menu.digest"), callback_data="menu:digest"),
         ],
         [
-            InlineKeyboardButton(text="❓ Уточнения", callback_data="menu:clarify"),
-            InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings"),
+            InlineKeyboardButton(text=t(lang, "menu.clarify"), callback_data="menu:clarify"),
+            InlineKeyboardButton(text=t(lang, "menu.settings"), callback_data="menu:settings"),
         ],
     ]
     if internal_chat_id is not None and dashboard_configured():
         rows.append(
-            [InlineKeyboardButton(text="🌐 Сайт с задачами", url=chat_dashboard_url(internal_chat_id))]
+            [InlineKeyboardButton(text=t(lang, "menu.site"), url=chat_dashboard_url(internal_chat_id))]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -124,34 +128,36 @@ def _command_arg(message: Message) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+async def _language_of(telegram_chat_id: int) -> str:
+    """Reads only: a chat the bot has not stored yet simply gets the default language."""
+    async with async_session_factory() as session:
+        return normalize(await ChatRepository(session).get_language(telegram_chat_id))
+
+
 async def _require_admin(message: Message) -> bool:
     if is_admin(message.from_user.id if message.from_user else None):
         return True
-    await message.answer("Эта команда доступна только администраторам бота.")
+    await message.answer(t(await _language_of(message.chat.id), "bot.admin_only"))
     return False
 
 
-async def _get_internal_chat_id(telegram_chat_id: int, chat_title: str | None) -> int:
+async def _chat_ref(telegram_chat_id: int, chat_title: str | None) -> tuple[int, str]:
+    """The chat's internal id and language."""
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(telegram_chat_id, chat_title)
         await session.commit()
-        return chat.id
+        return chat.id, chat_language(chat)
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
-    internal_chat_id = None
-    if message.chat:
-        internal_chat_id = await _get_internal_chat_id(message.chat.id, message.chat.title)
+    internal_chat_id, lang = await _chat_ref(message.chat.id, message.chat.title)
     await safe_answer(
         message,
-        "👋 Привет! Я *Digest* — анализирую рабочий чат и собираю итоги обсуждений.\n\n"
-        "Я слежу за обсуждениями, разбираю их по темам, выделяю решения и задачи "
-        "и присылаю ежедневный и еженедельный дайджест.\n\n"
-        "Выбери действие на кнопках ниже 👇",
+        t(lang, "bot.start"),
         parse_mode="Markdown",
-        reply_markup=_main_menu_keyboard(internal_chat_id),
+        reply_markup=_main_menu_keyboard(lang, internal_chat_id),
     )
 
 
@@ -159,25 +165,8 @@ async def cmd_start(message: Message) -> None:
 async def cmd_help(message: Message) -> None:
     # Plain text: command names contain "_", which Telegram Markdown would
     # misread as italics. Actions are also available via the buttons below.
-    text = (
-        "Digest — что я умею:\n\n"
-        "Я сам читаю все сообщения в чате и выделяю из них задачи — команды для "
-        "этого не нужны. Кнопки ниже — чтобы посмотреть результат:\n\n"
-        "📋 Задачи — активные задачи (с кнопками статусов)\n"
-        "📊 Дайджест — сводка за сегодня\n"
-        "❓ Уточнения — задачи, где не хватает данных\n"
-        "⚙️ Настройки — часовой пояс и время дайджеста\n\n"
-        "Отчёт за период: /digest, /digest today, /digest yesterday, /digest week, /digest 3d, "
-        "/digest 2026-11-01 2026-11-03\n\n"
-        "Другие команды: /task <текст>, /status, /chatid\n\n"
-        "Для администраторов: /set_timezone <TZ>, /set_digest_time <HH:MM>, "
-        "/set_weekly <пн..вс|off>, /set_digest_chat <id|here>, /digest_on, /digest_off, "
-        "/reanalyze <дней>, /purge_history <дней> confirm, /pin_dashboard"
-    )
-    internal_chat_id = None
-    if message.chat:
-        internal_chat_id = await _get_internal_chat_id(message.chat.id, message.chat.title)
-    await safe_answer(message, text, reply_markup=_main_menu_keyboard(internal_chat_id))
+    internal_chat_id, lang = await _chat_ref(message.chat.id, message.chat.title)
+    await safe_answer(message, t(lang, "bot.help"), reply_markup=_main_menu_keyboard(lang, internal_chat_id))
 
 
 async def _send_tasks(bot: Bot, chat_id: int, chat_title: str | None = None) -> None:
@@ -186,7 +175,8 @@ async def _send_tasks(bot: Bot, chat_id: int, chat_title: str | None = None) -> 
         task_repo = TaskRepository(session)
         chat = await chat_repo.get_or_create(chat_id, chat_title)
         tasks = await task_repo.get_active(chat.id)
-        payloads = [(_task_block_text(t), t.id, t.status) for t in tasks]
+        lang = chat_language(chat)
+        payloads = [(_task_block_text(task, lang), task.id, task.status) for task in tasks]
         internal_chat_id = chat.id
 
     web_link_markup: InlineKeyboardMarkup | None = None
@@ -195,7 +185,7 @@ async def _send_tasks(bot: Bot, chat_id: int, chat_title: str | None = None) -> 
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🌐 Открыть все на сайте",
+                        text=t(lang, "menu.open_all"),
                         url=chat_dashboard_url(internal_chat_id),
                     )
                 ]
@@ -203,19 +193,19 @@ async def _send_tasks(bot: Bot, chat_id: int, chat_title: str | None = None) -> 
         )
 
     if not payloads:
-        await safe_send_message(bot, chat_id, "Активных задач нет.", reply_markup=web_link_markup)
+        await safe_send_message(bot, chat_id, t(lang, "bot.no_tasks"), reply_markup=web_link_markup)
         return
 
     await safe_send_message(
         bot,
         chat_id,
-        f"*Активные задачи* ({len(payloads)}):",
+        t(lang, "bot.tasks_header", count=len(payloads)),
         parse_mode="Markdown",
         reply_markup=web_link_markup,
     )
     for text, task_id, status in payloads[:INLINE_TASK_LIMIT]:
         await safe_send_message(
-            bot, chat_id, text, parse_mode="Markdown", reply_markup=_task_keyboard(task_id, status)
+            bot, chat_id, text, parse_mode="Markdown", reply_markup=_task_keyboard(task_id, status, lang)
         )
     remaining = len(payloads) - INLINE_TASK_LIMIT
     if remaining > 0:
@@ -223,11 +213,11 @@ async def _send_tasks(bot: Bot, chat_id: int, chat_title: str | None = None) -> 
             await safe_send_message(
                 bot,
                 chat_id,
-                f"…и ещё {remaining}. Полный список — на сайте 👇",
+                t(lang, "bot.more_on_site", count=remaining),
                 reply_markup=web_link_markup,
             )
         else:
-            await safe_send_message(bot, chat_id, f"…и ещё {remaining}.")
+            await safe_send_message(bot, chat_id, t(lang, "bot.more", count=remaining))
 
 
 async def _send_digest(
@@ -236,17 +226,13 @@ async def _send_digest(
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(chat_id, chat_title)
+        lang = chat_language(chat)
         period = parse_period(period_arg, chat.timezone, now_utc())
         if period is None:
-            await safe_send_message(
-                bot,
-                chat_id,
-                "Не понял период. Примеры: /digest, /digest today, /digest yesterday, "
-                "/digest week, /digest 3d, /digest 2026-11-01 2026-11-03",
-            )
+            await safe_send_message(bot, chat_id, t(lang, "bot.bad_period"))
             return
 
-        await safe_send_message(bot, chat_id, "⏳ Формирую дайджест...")
+        await safe_send_message(bot, chat_id, t(lang, "bot.digest_building"))
         llm = _make_llm()
         digest_svc = DigestService(session, llm)
         try:
@@ -256,7 +242,7 @@ async def _send_digest(
         except Exception as e:
             logger.error("send_digest.error", error=type(e).__name__)
             await session.rollback()
-            await safe_send_message(bot, chat_id, "Не удалось сформировать дайджест. Попробуйте позже.")
+            await safe_send_message(bot, chat_id, t(lang, "bot.digest_failed"))
             return
         if await digest_svc.deliver(bot, digest, chat_id):
             metrics.digests_sent_total.inc()
@@ -267,41 +253,51 @@ async def _send_clarify(bot: Bot, chat_id: int, chat_title: str | None = None) -
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(chat_id, chat_title)
         pending = await ClarificationService(session).get_pending_for_chat(chat.id)
+        lang = chat_language(chat)
 
     if not pending:
-        await safe_send_message(bot, chat_id, "Нет задач, требующих уточнения.")
+        await safe_send_message(bot, chat_id, t(lang, "bot.no_clarifications"))
         return
-    lines = ["*Задачи, требующие уточнения:*\n"]
+    lines = [t(lang, "bot.clarifications_header")]
     lines.extend(f"❓ {c.question}" for c in pending)
     await safe_send_message(bot, chat_id, "\n".join(lines), parse_mode="Markdown")
+
+
+def _language_buttons() -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton(text=LANGUAGE_NAMES[code], callback_data=f"language:{code}")
+        for code in LANGUAGES
+    ]
 
 
 async def _send_settings(bot: Bot, chat_id: int, chat_title: str | None = None) -> None:
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(chat_id, chat_title)
+    lang = chat_language(chat)
     weekly = (
-        f"по дням «{WEEKDAY_NAMES[chat.weekly_digest_day]}»"
+        t(lang, "bot.weekly_on", day=t(lang, f"weekday.{chat.weekly_digest_day}"))
         if chat.weekly_digest_enabled
-        else "выключен"
+        else t(lang, "bot.off")
     )
-    text = (
-        f"*Настройки чата:*\n\n"
-        f"🌐 Часовой пояс: `{chat.timezone}`\n"
-        f"🕕 Время дайджеста: `{chat.digest_time}`\n"
-        f"📨 Дайджест в этом чате: {'включён' if chat.digest_enabled else 'выключен'}\n"
-        f"🗓 Еженедельный: {weekly}\n"
-        f"📤 Куда отправлять: `{chat.digest_chat_id or 'этот чат'}`\n"
-        f"🆔 Chat ID: `{chat.telegram_chat_id}`\n\n"
-        f"Изменить: `/set_timezone <TZ>`, `/set_digest_time <HH:MM>`, `/set_weekly <пн..вс|off>`, "
-        f"`/set_digest_chat <id|here>`, `/digest_on`, `/digest_off`"
+    text = t(
+        lang,
+        "bot.settings",
+        timezone=chat.timezone,
+        digest_time=chat.digest_time,
+        enabled=t(lang, "bot.on" if chat.digest_enabled else "bot.off"),
+        weekly=weekly,
+        target=chat.digest_chat_id or t(lang, "bot.this_chat"),
+        language=LANGUAGE_NAMES[lang],
+        chat_id=chat.telegram_chat_id,
     )
     presets = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=f"🕕 {t}", callback_data=f"digest_time:{t}")
-                for t in DIGEST_TIME_PRESETS
-            ]
+                InlineKeyboardButton(text=f"🕕 {preset}", callback_data=f"digest_time:{preset}")
+                for preset in DIGEST_TIME_PRESETS
+            ],
+            _language_buttons(),
         ]
     )
     await safe_send_message(bot, chat_id, text, parse_mode="Markdown", reply_markup=presets)
@@ -345,7 +341,7 @@ async def cmd_task(message: Message) -> None:
 
     task_text = _command_arg(message)
     if not task_text:
-        await message.answer("Укажите текст задачи: /task <описание задачи>")
+        await message.answer(t(await _language_of(message.chat.id), "bot.task_text_needed"))
         return
 
     fu = message.from_user
@@ -365,10 +361,11 @@ async def cmd_task(message: Message) -> None:
             priority=TaskPriority.medium,
         )
         await session.commit()
+        lang = chat_language(chat)
 
     await safe_answer(
         message,
-        f"✅ Задача создана:\n*{task.title}*\nID: `{task.id}`",
+        t(lang, "bot.task_created", title=task.title, id=task.id),
         parse_mode="Markdown",
     )
 
@@ -390,20 +387,19 @@ async def cmd_set_timezone(message: Message) -> None:
     if not message.chat or not message.text or not await _require_admin(message):
         return
     arg = _command_arg(message)
+    lang = await _language_of(message.chat.id)
     if not arg:
-        await message.answer("Укажите часовой пояс, например: /set_timezone Europe/Moscow")
+        await message.answer(t(lang, "bot.timezone_needed"))
         return
     if not is_valid_timezone(arg):
-        await message.answer(
-            f"Неизвестный часовой пояс: {arg}\nПримеры: Asia/Almaty, Europe/Moscow, UTC"
-        )
+        await message.answer(t(lang, "bot.timezone_unknown", value=arg))
         return
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(message.chat.id, message.chat.title)
         await chat_repo.update_settings(chat, timezone=arg)
         await session.commit()
-    await safe_answer(message, f"✅ Часовой пояс обновлён: `{arg}`", parse_mode="Markdown")
+    await safe_answer(message, t(lang, "bot.timezone_set", value=arg), parse_mode="Markdown")
 
 
 @router.message(Command("set_digest_time"))
@@ -411,27 +407,32 @@ async def cmd_set_digest_time(message: Message) -> None:
     if not message.chat or not message.text or not await _require_admin(message):
         return
     arg = _command_arg(message)
+    lang = await _language_of(message.chat.id)
     if not arg:
-        await message.answer("Укажите время в формате HH:MM, например: /set_digest_time 18:00")
+        await message.answer(t(lang, "bot.time_needed"))
         return
     if not is_valid_digest_time(arg):
-        await message.answer(f"Неверный формат времени: {arg}\nОжидается HH:MM, например 18:00")
+        await message.answer(t(lang, "bot.time_invalid", value=arg))
         return
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(message.chat.id, message.chat.title)
         await chat_repo.update_settings(chat, digest_time=arg)
         await session.commit()
-    await safe_answer(message, f"✅ Время дайджеста обновлено: `{arg}`", parse_mode="Markdown")
+    await safe_answer(message, t(lang, "bot.time_set", value=arg), parse_mode="Markdown")
 
 
 @router.callback_query(F.data.startswith("digest_time:"))
 async def on_digest_time(callback: CallbackQuery) -> None:
     value = (callback.data or "").split(":", 1)[1]
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Только для администраторов", show_alert=True)
+    if not isinstance(callback.message, Message):
+        await callback.answer()
         return
-    if not is_valid_digest_time(value) or not isinstance(callback.message, Message):
+    lang = await _language_of(callback.message.chat.id)
+    if not is_admin(callback.from_user.id):
+        await callback.answer(t(lang, "bot.admin_only_short"), show_alert=True)
+        return
+    if not is_valid_digest_time(value):
         await callback.answer()
         return
     async with async_session_factory() as session:
@@ -439,7 +440,51 @@ async def on_digest_time(callback: CallbackQuery) -> None:
         chat = await chat_repo.get_or_create(callback.message.chat.id, callback.message.chat.title)
         await chat_repo.update_settings(chat, digest_time=value)
         await session.commit()
-    await callback.answer(f"Время дайджеста: {value}")
+    await callback.answer(t(lang, "bot.time_set_short", value=value))
+
+
+async def _save_language(telegram_chat_id: int, chat_title: str | None, language: str) -> None:
+    async with async_session_factory() as session:
+        chat_repo = ChatRepository(session)
+        chat = await chat_repo.get_or_create(telegram_chat_id, chat_title)
+        await chat_repo.set_language(chat, language)
+        await session.commit()
+
+
+@router.message(Command("language"))
+async def cmd_language(message: Message) -> None:
+    if not message.chat or not await _require_admin(message):
+        return
+    arg = _command_arg(message).lower()
+    lang = await _language_of(message.chat.id)
+    if not arg:
+        await message.answer(
+            t(lang, "bot.language_current", language=LANGUAGE_NAMES[lang]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[_language_buttons()]),
+        )
+        return
+    if arg not in LANGUAGES:
+        await message.answer(t(lang, "bot.language_unknown", value=arg))
+        return
+    await _save_language(message.chat.id, message.chat.title, arg)
+    await message.answer(t(arg, "bot.language_set", language=LANGUAGE_NAMES[arg]))
+
+
+@router.callback_query(F.data.startswith("language:"))
+async def on_language(callback: CallbackQuery) -> None:
+    value = (callback.data or "").split(":", 1)[1]
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    chat = callback.message.chat
+    if not is_admin(callback.from_user.id):
+        await callback.answer(t(await _language_of(chat.id), "bot.admin_only_short"), show_alert=True)
+        return
+    if value not in LANGUAGES:
+        await callback.answer()
+        return
+    await _save_language(chat.id, chat.title, value)
+    await callback.answer(t(value, "bot.language_set", language=LANGUAGE_NAMES[value]))
 
 
 @router.message(Command("set_weekly"))
@@ -447,8 +492,9 @@ async def cmd_set_weekly(message: Message) -> None:
     if not message.chat or not await _require_admin(message):
         return
     arg = _command_arg(message).lower()
+    lang = await _language_of(message.chat.id)
     if arg != "off" and arg not in WEEKDAYS:
-        await message.answer("Укажите день или off, например: /set_weekly пт")
+        await message.answer(t(lang, "bot.weekly_needed"))
         return
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
@@ -461,7 +507,9 @@ async def cmd_set_weekly(message: Message) -> None:
             )
         await session.commit()
     await message.answer(
-        "🔕 Еженедельный дайджест выключен." if arg == "off" else f"✅ Еженедельный дайджест: {arg}"
+        t(lang, "bot.weekly_off")
+        if arg == "off"
+        else t(lang, "bot.weekly_set", day=t(lang, f"weekday.{WEEKDAYS[arg]}"))
     )
 
 
@@ -470,23 +518,24 @@ async def cmd_set_digest_chat(message: Message) -> None:
     if not message.chat or not await _require_admin(message):
         return
     arg = _command_arg(message).lower()
+    lang = await _language_of(message.chat.id)
     target: int | None = None
     if arg != "here":
         try:
             target = int(arg)
         except ValueError:
-            await message.answer("Укажите ID чата или here, например: /set_digest_chat -1001234567890")
+            await message.answer(t(lang, "bot.target_needed"))
             return
         # A digest is a summary of this chat: it may only go somewhere already trusted.
         if target not in settings.allowed_chats:
-            await message.answer("Этого чата нет в ALLOWED_CHAT_IDS.")
+            await message.answer(t(lang, "bot.target_not_allowed"))
             return
     async with async_session_factory() as session:
         chat_repo = ChatRepository(session)
         chat = await chat_repo.get_or_create(message.chat.id, message.chat.title)
         await chat_repo.set_digest_target(chat, target)
         await session.commit()
-    await message.answer(f"✅ Отчёты будут приходить в: {target or 'этот чат'}")
+    await message.answer(t(lang, "bot.target_set", target=target or t(lang, "bot.this_chat")))
 
 
 @router.message(Command("chatid"))
@@ -499,17 +548,17 @@ async def cmd_status(message: Message) -> None:
     async with async_session_factory() as session:
         chat = await ChatRepository(session).get_or_create(message.chat.id, message.chat.title)
         pending, _ = await MessageRepository(session).pending_stats(chat.id)
-    blocked = llm_block_reason()
+        lang = chat_language(chat)
+    blocked = llm_block_reason(lang)
     if settings.llm_provider != "openai":
-        where = "тестовый режим без модели (mock)"
+        where = t(lang, "bot.model_mock")
     elif is_local_endpoint(settings.openai_base_url):
-        where = "локальная модель, данные не покидают сервер"
+        where = t(lang, "bot.model_local")
     else:
-        where = "внешний сервис"
+        where = t(lang, "bot.model_external")
+    state = t(lang, "bot.analysis_paused", reason=blocked) if blocked else t(lang, "bot.analysis_running")
     await message.answer(
-        f"Модель: {settings.openai_model} ({where})\n"
-        f"Анализ: {'приостановлен: ' + blocked if blocked else 'работает'}\n"
-        f"Сообщений в очереди: {pending}"
+        t(lang, "bot.status", model=settings.openai_model, where=where, state=state, pending=pending)
     )
 
 
@@ -518,8 +567,9 @@ async def cmd_reanalyze(message: Message) -> None:
     if not message.chat or not await _require_admin(message):
         return
     arg = _command_arg(message)
+    lang = await _language_of(message.chat.id)
     if not arg.isdigit() or int(arg) == 0:
-        await message.answer("Укажите число дней: /reanalyze 7")
+        await message.answer(t(lang, "bot.days_needed"))
         return
     async with async_session_factory() as session:
         chat = await ChatRepository(session).get_or_create(message.chat.id, message.chat.title)
@@ -527,7 +577,7 @@ async def cmd_reanalyze(message: Message) -> None:
             chat.id, now_utc() - timedelta(days=int(arg))
         )
         await session.commit()
-    await message.answer(f"Поставлено в очередь на анализ: {count}")
+    await message.answer(t(lang, "bot.requeued", count=count))
 
 
 @router.message(Command("purge_history"))
@@ -535,12 +585,9 @@ async def cmd_purge_history(message: Message) -> None:
     if not message.chat or not await _require_admin(message):
         return
     parts = _command_arg(message).split()
+    lang = await _language_of(message.chat.id)
     if len(parts) != 2 or not parts[0].isdigit() or parts[1] != "confirm":
-        await message.answer(
-            "Удаление необратимо. Формат: /purge_history <дней> confirm\n"
-            "Удаляются сообщения старше указанного числа дней. "
-            "0 удаляет всю историю чата вместе с темами и отчётами; задачи остаются."
-        )
+        await message.answer(t(lang, "bot.purge_help"))
         return
     days = int(parts[0])
     async with async_session_factory() as session:
@@ -552,7 +599,7 @@ async def cmd_purge_history(message: Message) -> None:
             removed = await retention.delete_messages(now_utc() - timedelta(days=days), chat.id)
         await session.commit()
     logger.info("history.purged", chat_id=message.chat.id, days=days, removed=removed)
-    await message.answer(f"Удалено сообщений: {removed}")
+    await message.answer(t(lang, "bot.purged", count=removed))
 
 
 async def _set_digest_enabled(message: Message, enabled: bool) -> None:
@@ -563,10 +610,8 @@ async def _set_digest_enabled(message: Message, enabled: bool) -> None:
         chat = await chat_repo.get_or_create(message.chat.id, message.chat.title)
         await chat_repo.update_settings(chat, digest_enabled=enabled)
         await session.commit()
-    if enabled:
-        await message.answer("🔔 Дайджест в этом чате включён.")
-    else:
-        await message.answer("🔕 Дайджест в этом чате выключен. Задачи бот собирать продолжит.")
+        lang = chat_language(chat)
+    await message.answer(t(lang, "bot.digest_enabled" if enabled else "bot.digest_disabled"))
 
 
 @router.message(Command("pin_dashboard"))
@@ -574,21 +619,19 @@ async def cmd_pin_dashboard(message: Message, bot: Bot) -> None:
     """Send the web-dashboard link and pin it, so it stays visible above the chat."""
     if not message.chat or not await _require_admin(message):
         return
+    internal_chat_id, lang = await _chat_ref(message.chat.id, message.chat.title)
     if not dashboard_configured():
-        await message.answer(
-            "Сайт с задачами не настроен (нет DASHBOARD_SECRET / PUBLIC_BASE_URL в .env)."
-        )
+        await message.answer(t(lang, "bot.site_not_configured"))
         return
-    internal_chat_id = await _get_internal_chat_id(message.chat.id, message.chat.title)
     sent = await safe_send_message(
         bot,
         message.chat.id,
-        "🌐 Задачи этого чата на сайте:",
+        t(lang, "bot.site_link"),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🌐 Открыть сайт с задачами",
+                        text=t(lang, "menu.open_site"),
                         url=chat_dashboard_url(internal_chat_id),
                     )
                 ]
@@ -601,10 +644,7 @@ async def cmd_pin_dashboard(message: Message, bot: Bot) -> None:
         await bot.pin_chat_message(chat_id=message.chat.id, message_id=sent.message_id)
     except Exception as e:
         logger.warning("pin_dashboard.pin_failed", error=str(e))
-        await message.answer(
-            "Ссылку отправил, но закрепить не получилось — дайте боту право "
-            "«Закреплять сообщения» в настройках группы и повторите /pin_dashboard."
-        )
+        await message.answer(t(lang, "bot.pin_failed"))
 
 
 @router.message(Command("digest_on"))
@@ -625,13 +665,13 @@ async def on_task_action(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     _, task_id_str, action = parts
-    new_status = TASK_ACTIONS.get(action)
-    if new_status is None or not task_id_str.isdigit():
-        await callback.answer("Неизвестное действие")
-        return
-
     if not isinstance(callback.message, Message):
         await callback.answer()
+        return
+
+    new_status = TASK_ACTIONS.get(action)
+    if new_status is None or not task_id_str.isdigit():
+        await callback.answer(t(await _language_of(callback.message.chat.id), "bot.unknown_action"))
         return
 
     new_text: str | None = None
@@ -639,17 +679,18 @@ async def on_task_action(callback: CallbackQuery) -> None:
     async with async_session_factory() as session:
         task_repo = TaskRepository(session)
         chat = await ChatRepository(session).get_or_create(callback.message.chat.id)
+        lang = chat_language(chat)
         task = await task_repo.get_by_id(int(task_id_str))
         # The id comes from the client, so a task of another chat must look like no task.
         if task is None or task.chat_id != chat.id:
-            await callback.answer("Задача не найдена")
+            await callback.answer(t(lang, "bot.task_not_found"))
             return
         await task_repo.set_status(task, new_status)
         await session.commit()
-        new_text = _task_block_text(task)
-        markup = _task_keyboard(task.id, task.status)
+        new_text = _task_block_text(task, lang)
+        markup = _task_keyboard(task.id, task.status, lang)
 
-    await callback.answer(f"Статус: {STATUS_LABELS.get(new_status.value, new_status.value)}")
+    await callback.answer(t(lang, "bot.status_changed", status=status_labels(lang)[new_status.value]))
     # callback.message may be an InaccessibleMessage (too old) — only edit a real one.
     if isinstance(callback.message, Message) and new_text is not None:
         try:

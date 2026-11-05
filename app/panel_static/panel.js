@@ -3,19 +3,12 @@
 // Everything from the server goes in through textContent: chat titles and messages are
 // written by Telegram users, so nothing here may build HTML from strings.
 const $ = (id) => document.getElementById(id);
-const WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
+const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6].map((day) => t(`weekday.${day}`));
 const KINDS = {
-  decision: "Решение", proposal: "Предложение", task: "Задача",
-  question: "Вопрос", blocker: "Блокер", next_action: "Следующий шаг",
+  decision: t("kind.decision"), proposal: t("kind.proposal"), task: t("kind.task"),
+  question: t("kind.question"), blocker: t("kind.blocker"), next_action: t("kind.next_action"),
 };
-const SAMPLE = `Аня: По Security Baseline предлагаю перейти на CIS Level 2.
-Борис: Не уверен, это может сломать коннектор AD SCA.
-Виктор: API AD SCA отдаёт 500 на /scan, это блокер для релиза.
-Борис: Виктор, посмотри логи до пятницы.
-Виктор: Да, возьму.
-Дина: Решили: на фронте используем React Query.
-Дина: Кто обновит сертификаты на стейдже?
-Аня: Кто идёт на обед?`;
+const SAMPLE = t("sandbox.sample");
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -28,18 +21,24 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+function requestHeaders(hasBody) {
+  const headers = { "X-Panel-Language": LANG };
+  if (hasBody) headers["Content-Type"] = "application/json";
+  return headers;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
-    headers: options.body ? { "Content-Type": "application/json" } : {},
+    headers: requestHeaders(options.body),
   });
   if (response.status === 401 && path !== "/api/login") {
     showLogin();
-    throw new Error("Войдите в панель.");
+    throw new Error(t("api.sign_in"));
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(typeof data.detail === "string" ? data.detail : "Запрос не выполнен.");
+    const error = new Error(typeof data.detail === "string" ? data.detail : t("api.failed"));
     error.detail = data.detail;
     throw error;
   }
@@ -86,20 +85,20 @@ function renderSetup(steps) {
   const box = $("setup");
   box.hidden = !steps.length;
   box.replaceChildren(
-    el("h2", { textContent: "Что сделать, чтобы бот заработал" }),
+    el("h2", { textContent: t("setup.title") }),
     el("ol", {}, ...steps.map((step) => el("li", { textContent: step }))),
   );
 }
 
 function detailLine(item) {
   const parts = [];
-  if (item.owner !== undefined) parts.push(item.owner || "исполнитель не определён");
-  if (item.deadline) parts.push(`срок ${item.deadline}`);
+  if (item.owner !== undefined) parts.push(item.owner || t("item.no_owner"));
+  if (item.deadline) parts.push(t("item.deadline", { value: item.deadline }));
   return parts.length ? el("small", { textContent: parts.join(" · ") }) : null;
 }
 
 function taskRow(task) {
-  const done = el("button", { type: "button", class: "small", textContent: "Готово" });
+  const done = el("button", { type: "button", class: "small", textContent: t("common.done") });
   done.addEventListener("click", async () => {
     await api(`/api/tasks/${task.id}/status`, { method: "POST", body: JSON.stringify({ status: "done" }) });
     await loadSummary();
@@ -130,42 +129,42 @@ async function loadSummary() {
 
   const select = $("summary-chat");
   select.replaceChildren(
-    ...data.chats.map((chat) => el("option", { value: String(chat.id), textContent: chat.title || "Без названия" })),
+    ...data.chats.map((chat) => el("option", { value: String(chat.id), textContent: chat.title || t("common.untitled") })),
   );
   if (data.chat_id) select.value = String(data.chat_id);
 
   if (!data.chat_id) {
-    $("summary-body").replaceChildren(el("p", { class: "hint", textContent: "Здесь появятся решения и задачи, когда бот начнёт работать в чате." }));
+    $("summary-body").replaceChildren(el("p", { class: "hint", textContent: t("summary.empty") }));
     $("digest-meta").textContent = "";
     $("digest-text").textContent = "";
     return;
   }
   $("summary-body").replaceChildren(
-    board("Решения", data.decisions.map(plainRow), "Подтверждённых решений нет."),
-    board("Задачи", data.tasks.map(taskRow), "Открытых задач нет."),
-    board("Блокеры", data.blockers.map(plainRow), "Блокеров нет."),
-    board("Открытые вопросы", data.questions.map(plainRow), "Вопросов нет."),
+    board(t("board.decisions"), data.decisions.map(plainRow), t("board.no_decisions")),
+    board(t("board.tasks"), data.tasks.map(taskRow), t("board.no_tasks")),
+    board(t("board.blockers"), data.blockers.map(plainRow), t("board.no_blockers")),
+    board(t("board.questions"), data.questions.map(plainRow), t("board.no_questions")),
   );
   if (data.pending) {
-    $("summary-body").append(el("p", { class: "hint wide", textContent: `Ещё не разобрано сообщений: ${data.pending}.` }));
+    $("summary-body").append(el("p", { class: "hint wide", textContent: t("summary.pending", { count: data.pending }) }));
   }
   $("digest-meta").textContent = data.digest
-    ? `Последний отчёт: ${new Date(data.digest.sent_at).toLocaleString("ru-RU")}`
-    : "Отчётов пока не было.";
+    ? t("summary.last_report", { when: new Date(data.digest.sent_at).toLocaleString(LANG === "ru" ? "ru-RU" : "en-GB") })
+    : t("summary.no_reports");
   $("digest-text").textContent = data.digest ? data.digest.text : "";
 }
 
 async function buildDigest() {
   const button = $("digest-build");
   button.disabled = true;
-  $("digest-meta").textContent = "Собираю отчёт…";
+  $("digest-meta").textContent = t("digest.building");
   try {
     const data = await api("/api/digest-preview", {
       method: "POST",
       body: JSON.stringify({ chat_id: Number($("summary-chat").value), days: Number($("summary-days").value) }),
     });
     $("digest-text").textContent = data.text;
-    $("digest-meta").textContent = "Предпросмотр. В чат ничего не отправлено.";
+    $("digest-meta").textContent = t("digest.preview");
   } catch (error) {
     $("digest-meta").textContent = error.message;
   } finally {
@@ -185,7 +184,7 @@ function renderControl(field) {
   if (field.kind === "select") {
     const select = el("select", { id, disabled: field.locked });
     for (const option of field.options) {
-      select.append(el("option", { value: option, textContent: option || "не задано", selected: option === field.value }));
+      select.append(el("option", { value: option, textContent: option || t("common.not_set"), selected: option === field.value }));
     }
     return select;
   }
@@ -195,13 +194,13 @@ function renderControl(field) {
     autocomplete: "off",
     disabled: field.locked,
     value: field.kind === "secret" ? "" : field.value,
-    placeholder: field.kind === "secret" ? (field.is_set ? "Задан. Оставьте пустым, чтобы не менять" : "Не задан") : "",
+    placeholder: field.kind === "secret" ? (field.is_set ? t("field.secret_set") : t("field.secret_unset")) : "",
   });
 }
 
 function renderField(field) {
   const id = `f-${field.key}`;
-  const note = field.locked ? "Значение задано на сервере и здесь не меняется." : field.help;
+  const note = field.locked ? t("field.locked") : field.help;
   const error = el("p", { id: `e-${field.key}`, class: "error", role: "alert" });
   if (field.kind === "bool") {
     const parts = [
@@ -212,7 +211,7 @@ function renderField(field) {
       parts.push(
         el("div", { class: "confirm" },
           el("input", { id: "confirm-external", type: "checkbox" }),
-          el("label", { htmlFor: "confirm-external", textContent: "Владелец данных разрешил отправлять переписку этому сервису." }),
+          el("label", { htmlFor: "confirm-external", textContent: t("field.confirm_owner") }),
         ),
       );
     }
@@ -259,15 +258,15 @@ async function saveSettings(event) {
   event.preventDefault();
   for (const field of settingFields) $(`e-${field.key}`).textContent = "";
   const status = $("save-status");
-  status.textContent = "Сохраняю…";
+  status.textContent = t("common.saving");
   try {
     const result = await api("/api/settings", {
       method: "POST",
       body: JSON.stringify({ values: collectValues(), confirm_external: $("confirm-external").checked }),
     });
-    if (result.restart_needed) showRestart("Настройки сохранены. Они заработают после перезапуска бота.");
+    if (result.restart_needed) showRestart(t("settings.restart"));
     await loadSettings();
-    status.textContent = result.changed.length ? `Сохранено настроек: ${result.changed.length}` : "Изменений нет.";
+    status.textContent = result.changed.length ? t("settings.saved_count", { count: result.changed.length }) : t("settings.no_changes");
   } catch (error) {
     const errors = error.detail && error.detail.errors;
     if (errors) {
@@ -275,7 +274,7 @@ async function saveSettings(event) {
         const target = $(`e-${key}`);
         if (target) target.textContent = message;
       }
-      status.textContent = "Исправьте отмеченные поля.";
+      status.textContent = t("common.fix_fields");
     } else {
       status.textContent = error.message;
     }
@@ -285,27 +284,27 @@ async function saveSettings(event) {
 // --- Step 1: model ----------------------------------------------------------
 
 function stackCard(stack, installed) {
-  const place = stack.external ? "Внешний сервис" : "На этом стенде";
+  const place = stack.external ? t("stack.external") : t("stack.local");
   const missing = !stack.external && installed.length && !installed.includes(stack.model);
   const confirmBox = el("input", { id: `confirm-${stack.id}`, type: "checkbox" });
   const status = el("span", { role: "status" });
-  const apply = stack.active ? null : el("button", { type: "button", textContent: "Выбрать" });
+  const apply = stack.active ? null : el("button", { type: "button", textContent: t("stack.select") });
   if (apply) {
     apply.addEventListener("click", async () => {
-      status.textContent = "Применяю…";
+      status.textContent = t("stack.applying");
       try {
         await api(`/api/stacks/${stack.id}/apply`, {
           method: "POST",
           body: JSON.stringify({ confirm_external: confirmBox.checked }),
         });
-        showRestart("Модель выбрана. Она заработает после перезапуска бота.");
+        showRestart(t("stack.restart"));
         await loadStacks();
       } catch (error) {
         status.textContent = error.message;
       }
     });
   }
-  const remove = stack.builtin ? null : el("button", { type: "button", textContent: "Удалить" });
+  const remove = stack.builtin ? null : el("button", { type: "button", textContent: t("common.delete") });
   if (remove) {
     remove.addEventListener("click", async () => {
       await api(`/api/stacks/${stack.id}`, { method: "DELETE" });
@@ -315,14 +314,14 @@ function stackCard(stack, installed) {
   return el("article", { class: "chat" },
     el("div", { class: "chat-head" },
       el("h3", { textContent: stack.name }),
-      el("span", { class: `pill ${stack.active ? "on" : "off"}`, textContent: stack.active ? "Используется" : place }),
+      el("span", { class: `pill ${stack.active ? "on" : "off"}`, textContent: stack.active ? t("stack.active") : place }),
       apply,
       remove,
     ),
-    missing ? el("p", { class: "error", textContent: "Модель не скачана: скачайте её в разделе ниже." }) : null,
+    missing ? el("p", { class: "error", textContent: t("stack.missing") }) : null,
     stack.external && !stack.active
       ? el("div", { class: "confirm" }, confirmBox,
-          el("label", { htmlFor: confirmBox.id, textContent: "Владелец данных разрешил отправлять переписку этому сервису." }))
+          el("label", { htmlFor: confirmBox.id, textContent: t("field.confirm_owner") }))
       : null,
     status,
   );
@@ -332,8 +331,8 @@ async function loadStacks() {
   const [data, { models }] = await Promise.all([api("/api/stacks"), api("/api/models")]);
   $("stacks").replaceChildren(...data.stacks.map((stack) => stackCard(stack, models)));
   $("models-installed").textContent = models.length
-    ? `Уже скачаны: ${models.join(", ")}`
-    : "Ollama не отвечает или в ней нет моделей.";
+    ? t("models.installed", { models: models.join(", ") })
+    : t("models.none");
 }
 
 async function addStack(event) {
@@ -346,13 +345,13 @@ async function addStack(event) {
   try {
     await api("/api/stacks", { method: "POST", body: JSON.stringify(body) });
     $("s-api_key").value = "";
-    $("stack-status").textContent = "Добавлено.";
+    $("stack-status").textContent = t("stack.added");
     await loadStacks();
   } catch (error) {
     const errors = error.detail && error.detail.errors;
     if (errors) {
       for (const [key, message] of Object.entries(errors)) $(`se-${key}`).textContent = message;
-      $("stack-status").textContent = "Исправьте отмеченные поля.";
+      $("stack-status").textContent = t("common.fix_fields");
     } else {
       $("stack-status").textContent = error.message;
     }
@@ -370,7 +369,7 @@ async function pullModel(event) {
   }
   const timer = setInterval(async () => {
     const state = await api("/api/models/pull");
-    status.textContent = state.status === "running" ? `Скачиваю ${state.model}: ${state.percent}%` : state.error || "Модель скачана.";
+    status.textContent = state.status === "running" ? t("pull.running", { model: state.model, percent: state.percent }) : state.error || t("pull.done");
     if (state.status !== "running") {
       clearInterval(timer);
       await loadStacks();
@@ -385,29 +384,29 @@ async function setAccess(telegramChatId, allowed) {
     method: "POST",
     body: JSON.stringify({ telegram_chat_id: telegramChatId, allowed }),
   });
-  showRestart("Список чатов изменён. Он заработает после перезапуска бота.");
+  showRestart(t("chats.restart"));
   await loadChats();
 }
 
 function waitingCard(chat) {
-  const allow = el("button", { type: "button", class: "primary", textContent: "Разрешить" });
+  const allow = el("button", { type: "button", class: "primary", textContent: t("chat.allow") });
   allow.addEventListener("click", () => setAccess(chat.telegram_chat_id, true));
   return el("article", { class: "chat" },
     el("div", { class: "chat-head" },
-      el("h3", { textContent: chat.title || "Без названия" }),
-      el("span", { class: "pill off", textContent: "Ждёт разрешения" }),
+      el("h3", { textContent: chat.title || t("common.untitled") }),
+      el("span", { class: "pill off", textContent: t("chat.waiting") }),
       allow,
     ),
   );
 }
 
 function allowedEmptyCard(chat) {
-  const forbid = el("button", { type: "button", textContent: "Запретить" });
+  const forbid = el("button", { type: "button", textContent: t("chat.block") });
   forbid.addEventListener("click", () => setAccess(chat.telegram_chat_id, false));
   return el("article", { class: "chat" },
     el("div", { class: "chat-head" },
       el("h3", { textContent: String(chat.telegram_chat_id) }),
-      el("span", { class: "pill on", textContent: "Разрешён, сообщений пока нет" }),
+      el("span", { class: "pill on", textContent: t("chat.allowed_no_messages") }),
       forbid,
     ),
   );
@@ -422,9 +421,13 @@ function chatCard(chat) {
   const day = el("select", { id: `${prefix}-day` },
     ...WEEKDAYS.map((name, index) => el("option", { value: String(index), textContent: name, selected: index === chat.weekly_digest_day })),
   );
-  const target = el("input", { id: `${prefix}-target`, value: chat.digest_chat_id ?? "", placeholder: "Этот чат" });
+  const target = el("input", { id: `${prefix}-target`, value: chat.digest_chat_id ?? "", placeholder: t("chat.this_chat") });
+  const language = el("select", { id: `${prefix}-language` },
+    el("option", { value: "", textContent: t("chat.language_default"), selected: !chat.language }),
+    ...Object.entries(LANGUAGE_NAMES).map(([code, name]) => el("option", { value: code, textContent: name, selected: chat.language === code })),
+  );
   const status = el("span", { role: "status" });
-  const save = el("button", { type: "button", class: "primary", textContent: "Сохранить" });
+  const save = el("button", { type: "button", class: "primary", textContent: t("common.save") });
 
   save.addEventListener("click", async () => {
     const raw = target.value.trim();
@@ -434,13 +437,14 @@ function chatCard(chat) {
       digest_enabled: daily.checked,
       weekly_digest_enabled: weekly.checked,
       weekly_digest_day: Number(day.value),
+      language: language.value,
     };
     if (raw) body.digest_chat_id = Number(raw);
     else body.clear_digest_chat = true;
-    status.textContent = "Сохраняю…";
+    status.textContent = t("common.saving");
     try {
       await api(`/api/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      status.textContent = "Сохранено.";
+      status.textContent = t("common.saved");
     } catch (error) {
       status.textContent = error.message;
     }
@@ -449,23 +453,23 @@ function chatCard(chat) {
   const access = el("button", {
     type: "button",
     class: chat.allowed ? "" : "primary",
-    textContent: chat.allowed ? "Запретить" : "Разрешить",
+    textContent: chat.allowed ? t("chat.block") : t("chat.allow"),
   });
   access.addEventListener("click", () => setAccess(chat.telegram_chat_id, !chat.allowed));
 
   // Deleting is permanent, so the first press only arms the button.
-  const purge = el("button", { type: "button", textContent: "Очистить данные чата" });
+  const purge = el("button", { type: "button", textContent: t("chat.purge") });
   let armed = false;
   purge.addEventListener("click", async () => {
     if (!armed) {
       armed = true;
-      purge.textContent = "Удалить сообщения, темы и отчёты?";
+      purge.textContent = t("chat.purge_confirm");
       return;
     }
     try {
       const result = await api(`/api/chats/${chat.id}/purge`, { method: "POST", body: JSON.stringify({ confirm: true }) });
-      status.textContent = `Удалено сообщений: ${result.removed}`;
-      purge.textContent = "Очистить данные чата";
+      status.textContent = t("chat.purged", { count: result.removed });
+      purge.textContent = t("chat.purge");
       armed = false;
     } catch (error) {
       status.textContent = error.message;
@@ -474,21 +478,22 @@ function chatCard(chat) {
 
   return el("article", { class: "chat" },
     el("div", { class: "chat-head" },
-      el("h3", { textContent: chat.title || "Без названия" }),
-      el("span", { class: `pill ${chat.allowed ? "on" : "off"}`, textContent: chat.allowed ? "Разрешён" : "Не разрешён" }),
+      el("h3", { textContent: chat.title || t("common.untitled") }),
+      el("span", { class: `pill ${chat.allowed ? "on" : "off"}`, textContent: chat.allowed ? t("chat.allowed") : t("chat.not_allowed") }),
       access,
     ),
     el("details", {},
-      el("summary", { textContent: `Отчёты: ${chat.digest_enabled ? `каждый день в ${chat.digest_time}` : "выключены"}` }),
+      el("summary", { textContent: t("chat.reports", { state: chat.digest_enabled ? t("chat.reports_daily", { time: chat.digest_time }) : t("chat.reports_off") }) }),
       el("div", { class: "stack" },
         el("div", { class: "grid2" },
-          el("div", { class: "field" }, el("label", { htmlFor: time.id, textContent: "Время отчёта" }), time),
-          el("div", { class: "field" }, el("label", { htmlFor: tz.id, textContent: "Часовой пояс" }), tz),
-          el("div", { class: "field" }, el("label", { htmlFor: day.id, textContent: "День еженедельного отчёта" }), day),
-          el("div", { class: "field" }, el("label", { htmlFor: target.id, textContent: "Куда отправлять" }), target),
+          el("div", { class: "field" }, el("label", { htmlFor: time.id, textContent: t("chat.report_time") }), time),
+          el("div", { class: "field" }, el("label", { htmlFor: tz.id, textContent: t("chat.timezone") }), tz),
+          el("div", { class: "field" }, el("label", { htmlFor: day.id, textContent: t("chat.weekly_day") }), day),
+          el("div", { class: "field" }, el("label", { htmlFor: target.id, textContent: t("chat.target") }), target),
+          el("div", { class: "field" }, el("label", { htmlFor: language.id, textContent: t("chat.language") }), language),
         ),
-        el("div", { class: "check-row" }, daily, el("label", { htmlFor: daily.id, textContent: "Ежедневный отчёт" })),
-        el("div", { class: "check-row" }, weekly, el("label", { htmlFor: weekly.id, textContent: "Еженедельный отчёт" })),
+        el("div", { class: "check-row" }, daily, el("label", { htmlFor: daily.id, textContent: t("chat.daily") })),
+        el("div", { class: "check-row" }, weekly, el("label", { htmlFor: weekly.id, textContent: t("chat.weekly") })),
         el("div", { class: "chat-foot" }, save, purge, status),
       ),
     ),
@@ -500,23 +505,23 @@ async function loadChats() {
   $("waiting").replaceChildren(...data.waiting.map(waitingCard));
   const cards = [...data.chats.map(chatCard), ...data.allowed_without_messages.map(allowedEmptyCard)];
   $("chats").replaceChildren(
-    ...(cards.length || data.waiting.length ? cards : [el("p", { class: "hint", textContent: "Чатов пока нет." })]),
+    ...(cards.length || data.waiting.length ? cards : [el("p", { class: "hint", textContent: t("chats.none") })]),
   );
 }
 
 function presenceRow(chat) {
-  const labels = { in: "ЕСТЬ", out: "НЕТ", moved: "НОВЫЙ ID" };
+  const labels = { in: t("presence.in"), out: t("presence.out"), moved: t("presence.moved") };
   const marks = { in: "ok", out: "fail", moved: "warn" };
   const note = chat.state === "moved"
-    ? `Группа стала супергруппой, её новый ID: ${chat.moved_to}.`
-    : chat.state === "in" && !chat.allowed ? "Бот здесь, но чат не разрешён." : "";
+    ? t("presence.moved_note", { id: chat.moved_to })
+    : chat.state === "in" && !chat.allowed ? t("presence.not_allowed_note") : "";
   const targetId = chat.state === "moved" ? chat.moved_to : chat.telegram_chat_id;
   const canAllow = (chat.state === "in" && !chat.allowed) || chat.state === "moved";
-  const allow = canAllow ? el("button", { type: "button", class: "small", textContent: "Разрешить" }) : null;
+  const allow = canAllow ? el("button", { type: "button", class: "small", textContent: t("chat.allow") }) : null;
   if (allow) allow.addEventListener("click", () => setAccess(targetId, true));
   return el("li", {},
     el("span", { class: `mark ${marks[chat.state]}`, textContent: labels[chat.state] }),
-    el("span", {}, `${chat.title || chat.telegram_chat_id}${chat.allowed ? " (разрешён)" : ""} `, allow),
+    el("span", {}, `${chat.title || chat.telegram_chat_id}${chat.allowed ? t("presence.allowed_mark") : ""} `, allow),
     note ? el("small", { textContent: note }) : null,
   );
 }
@@ -525,13 +530,13 @@ async function checkPresence() {
   const button = $("presence");
   const status = $("presence-status");
   button.disabled = true;
-  status.textContent = "Спрашиваю Telegram…";
+  status.textContent = t("presence.asking");
   try {
     const data = await api("/api/chats/presence", { method: "POST" });
     $("presence-results").replaceChildren(...data.chats.map(presenceRow));
     status.textContent = data.chats.length
-      ? `Бот @${data.bot}. Telegram не даёт полный список чатов, здесь только известные.`
-      : `Бот @${data.bot}. Известных чатов нет: добавьте его в группу, пока он запущен.`;
+      ? t("presence.known", { bot: data.bot })
+      : t("presence.none", { bot: data.bot });
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -544,11 +549,11 @@ async function checkPresence() {
 async function runChecks() {
   const button = $("check");
   button.disabled = true;
-  button.textContent = "Проверяю…";
+  button.textContent = t("check.running");
   const list = $("check-results");
   try {
     const data = await api("/api/check", { method: "POST" });
-    const labels = { ok: "ОК", warn: "ВНИМАНИЕ", fail: "ОШИБКА" };
+    const labels = { ok: t("check.ok"), warn: t("check.warn"), fail: t("check.fail") };
     list.replaceChildren(
       ...data.items.map((item) =>
         el("li", {},
@@ -562,7 +567,7 @@ async function runChecks() {
     list.replaceChildren(el("li", { class: "error", textContent: error.message }));
   } finally {
     button.disabled = false;
-    button.textContent = "Проверить всё";
+    button.textContent = t("check.button");
   }
 }
 
@@ -591,7 +596,7 @@ function resultCard(data) {
     el("div", {},
       el("strong", { textContent: topic.project ? `${topic.title} · ${topic.project}` : topic.title }),
       el("ul", {}, ...topic.items.map((item) => {
-        const details = [item.owner && `исполнитель: ${item.owner}`, item.deadline && `срок: ${item.deadline}`].filter(Boolean);
+        const details = [item.owner && t("sandbox.owner", { value: item.owner }), item.deadline && t("sandbox.deadline", { value: item.deadline })].filter(Boolean);
         return el("li", { class: item.status === "open" ? "" : "muted-item" },
           el("span", { class: "kind", textContent: `${KINDS[item.kind] || item.kind}: ` }),
           `${item.text}${details.length ? ` (${details.join(", ")})` : ""}`,
@@ -600,16 +605,16 @@ function resultCard(data) {
     ),
   );
   const notes = [];
-  if (data.rejected) notes.push(`отброшено проверками: ${data.rejected}`);
-  if (data.failed) notes.push(`не обработано сообщений: ${data.failed}`);
+  if (data.rejected) notes.push(t("sandbox.rejected", { count: data.rejected }));
+  if (data.failed) notes.push(t("sandbox.failed", { count: data.failed }));
   return el("article", { class: "result" },
     el("div", { class: "result-head" },
       document.createTextNode(data.stack),
-      el("span", { textContent: `${data.model} · ${data.seconds} с` }),
+      el("span", { textContent: t("sandbox.seconds", { model: data.model, seconds: data.seconds }) }),
     ),
     notes.length ? el("p", { class: "error", textContent: notes.join("; ") }) : null,
-    ...(topics.length ? topics : [el("p", { class: "hint", textContent: "Рабочих тем не найдено." })]),
-    el("details", {}, el("summary", { textContent: "Как будет выглядеть отчёт" }), el("pre", { class: "digest", textContent: data.digest })),
+    ...(topics.length ? topics : [el("p", { class: "hint", textContent: t("sandbox.no_topics") })]),
+    el("details", {}, el("summary", { textContent: t("sandbox.report_preview") }), el("pre", { class: "digest", textContent: data.digest })),
   );
 }
 
@@ -617,7 +622,7 @@ async function runSandbox() {
   const button = $("sandbox-run");
   const status = $("sandbox-status");
   button.disabled = true;
-  status.textContent = "Модель разбирает переписку. Без видеокарты это может занять несколько минут.";
+  status.textContent = t("sandbox.running");
   try {
     const data = await api("/api/sandbox", {
       method: "POST",
@@ -628,7 +633,7 @@ async function runSandbox() {
       }),
     });
     $("sandbox-results").prepend(resultCard(data));
-    status.textContent = "Готово.";
+    status.textContent = t("sandbox.done");
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -641,9 +646,9 @@ async function runSandbox() {
 async function loadMove() {
   const data = await api("/api/migration");
   $("move-summary").replaceChildren(
-    fact("Сообщений", String(data.messages)),
-    fact("Чатов", String(data.chats)),
-    fact("Размер базы", data.database_included ? `${data.database_mb} МБ` : "не входит в архив"),
+    fact(t("move.messages"), String(data.messages)),
+    fact(t("move.chats"), String(data.chats)),
+    fact(t("move.db_size"), data.database_included ? t("move.mb", { size: data.database_mb }) : t("move.not_in_archive")),
   );
   $("move-warning").hidden = data.database_included;
 }
@@ -651,7 +656,7 @@ async function loadMove() {
 async function exportBundle(event) {
   event.preventDefault();
   const status = $("export-status");
-  status.textContent = "Собираю архив…";
+  status.textContent = t("move.packing");
   const response = await fetch("/api/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -660,14 +665,14 @@ async function exportBundle(event) {
   $("export-password").value = "";
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    status.textContent = typeof data.detail === "string" ? data.detail : "Архив не собран.";
+    status.textContent = typeof data.detail === "string" ? data.detail : t("move.failed");
     return;
   }
   const name = (response.headers.get("content-disposition") || "").match(/filename="?([^";]+)/);
   const link = el("a", { href: URL.createObjectURL(await response.blob()), download: name ? name[1] : "digest-bot.zip" });
   link.click();
   URL.revokeObjectURL(link.href);
-  status.textContent = "Архив скачан.";
+  status.textContent = t("move.downloaded");
 }
 
 // --- Wiring -----------------------------------------------------------------
@@ -708,7 +713,7 @@ $("export-form").addEventListener("submit", exportBundle);
 
 $("restart").addEventListener("click", async () => {
   await api("/api/restart", { method: "POST" });
-  $("restart-text").textContent = "Запрос отправлен. Бот перезапустится в течение нескольких секунд.";
+  $("restart-text").textContent = t("restart.requested");
   $("restart").hidden = true;
 });
 

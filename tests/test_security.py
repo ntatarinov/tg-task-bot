@@ -91,9 +91,16 @@ def test_admin_check_and_id_parsing():
      "cmd_digest_on", "cmd_digest_off", "cmd_reanalyze", "cmd_purge_history"],
 )
 @pytest.mark.asyncio
-async def test_settings_commands_refuse_ordinary_members(command):
+async def test_settings_commands_refuse_ordinary_members(command, monkeypatch, session):
+    from contextlib import asynccontextmanager
+
     from app.bot import handlers
 
+    @asynccontextmanager
+    async def shared_session():
+        yield session
+
+    monkeypatch.setattr(handlers, "async_session_factory", shared_session)
     message = SimpleNamespace(
         chat=SimpleNamespace(id=ALLOWED_CHAT, title="Team"),
         from_user=SimpleNamespace(id=5),
@@ -102,7 +109,7 @@ async def test_settings_commands_refuse_ordinary_members(command):
     )
     await getattr(handlers, command)(message)
 
-    assert "только администраторам" in message.answer.call_args.args[0]
+    assert "for bot admins only" in message.answer.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -129,7 +136,7 @@ async def test_task_button_cannot_reach_another_chats_task(monkeypatch, session)
 
     await session.refresh(task)
     assert task.status.value == "new"
-    callback.answer.assert_called_once_with("Задача не найдена")
+    callback.answer.assert_called_once_with("Task not found")
 
 
 # --- Sending data to third parties -------------------------------------------

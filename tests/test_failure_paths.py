@@ -715,4 +715,4 @@ def test_bundle_command_line(monkeypatch, tmp_path, capsys, args, secrets):
     bundle.main()
 
     assert captured["with_data"] is secrets
-    assert ("вся переписка" in capsys.readouterr().out) is secrets
+    assert ("whole chat history" in capsys.readouterr().out) is secrets

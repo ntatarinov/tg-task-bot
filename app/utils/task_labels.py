@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from app.db.models import TaskStatus
+from app.i18n import t
 
-STATUS_LABELS: dict[str, str] = {
-    TaskStatus.new.value: "🆕 Новая",
-    TaskStatus.needs_clarification.value: "❓ Нужно уточнение",
-    TaskStatus.ready.value: "✅ Готова",
-    TaskStatus.in_progress.value: "🔄 В работе",
-    TaskStatus.done.value: "✔️ Выполнена",
-    TaskStatus.cancelled.value: "❌ Отменена",
-}
+
+def status_labels(language: str) -> dict[str, str]:
+    return {status.value: t(language, f"status.{status.value}") for status in TaskStatus}
+
 
 PRIORITY_EMOJI: dict[str, str] = {
     "low": "🟢",
@@ -27,10 +24,8 @@ TASK_ACTIONS: dict[str, TaskStatus] = {
     "reopen": TaskStatus.new,
 }
 
-# Plain text (no markup — safe under the bot's default HTML parse_mode without escaping)
-# appended to clarification questions so a reply is understood as the answer.
-CLARIFICATION_REPLY_HINT = "\n\n↩️ Ответьте на это сообщение (Reply), чтобы я учёл ваш ответ."
 
-
-def format_clarification_question(question: str) -> str:
-    return f"{question}{CLARIFICATION_REPLY_HINT}"
+def format_clarification_question(question: str, language: str) -> str:
+    """The hint is plain text (no markup, safe under the bot's default HTML parse_mode without
+    escaping) and makes a reply count as the answer."""
+    return f"{question}{t(language, 'clarify.reply_hint')}"

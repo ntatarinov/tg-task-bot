@@ -11,8 +11,8 @@ try {
 
 if (-not $running) {
     if (-not (Test-Path $ollama)) {
-        Write-Host "Ollama не установлена. Выполните: winget install Ollama.Ollama"
-        Read-Host "Нажмите Enter, чтобы закрыть окно"
+        Write-Host "Ollama is not installed. Run: winget install Ollama.Ollama"
+        Read-Host "Press Enter to close this window"
         exit 1
     }
     # Without this Ollama cuts a batch off at about 4K tokens.
@@ -25,11 +25,11 @@ if (-not $running) {
 .venv\Scripts\python.exe -m app.init_db
 .venv\Scripts\python.exe -m app.doctor
 if ($LASTEXITCODE -ne 0) {
-    Read-Host "Исправьте пункты выше и запустите снова. Нажмите Enter, чтобы закрыть окно"
+    Read-Host "Fix the items above and run this again. Press Enter to close this window"
     exit 1
 }
 # Exit code 75 means the settings panel asked for a restart.
 do {
     .venv\Scripts\python.exe -m app.polling
 } while ($LASTEXITCODE -eq 75)
-Read-Host "Бот остановился (или упал). Нажмите Enter, чтобы закрыть окно"
+Read-Host "The bot stopped (or crashed). Press Enter to close this window"

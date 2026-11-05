@@ -1,135 +1,135 @@
-# Аудит и план доработок (этапы 1–2)
+# Audit and improvement plan (stages 1–2)
 
-Дата аудита: 2026-11-04. Все пункты со статусом «воспроизведено» проверены запуском,
-а не только чтением кода. Проверки шли на временной БД и синтетической переписке:
-`bot.db` открывался только на чтение, тексты сообщений не выводились и никуда не отправлялись.
+Audit date: 2026-11-04. All items marked "reproduced" were verified by running them,
+not just by reading the code. Checks ran on a temporary database and a synthetic conversation:
+`bot.db` was opened read-only, and message text was neither printed nor sent anywhere.
 
-## 1. Состояние на момент аудита
+## 1. State at the time of the audit
 
-| Что | Результат проверки |
+| What | Check result |
 |---|---|
-| Стек | Python 3.12, aiogram 3.13, FastAPI, SQLAlchemy 2 async, APScheduler, OpenAI-совместимый клиент, SQLite локально / Postgres в Docker |
-| Подключение к Telegram | Long polling (`app.polling`) или webhook (`app.main`) |
-| Токен бота | **`401 Unauthorized`: токен отозван или недействителен, бот не запустится** |
-| ИИ-модель в `.env` | `llama-3.3-70b-versatile` на Groq: **`404 model_not_found`, модель отключена** |
-| Бесплатность | Ключ Groq работает. Лимиты из заголовков ответа: 1000 запросов в сутки, 8000 токенов в минуту |
-| Куда уходят данные | **Облако Groq (США)**, а не локальная Ollama, как считалось раньше |
-| Тесты | 66 passed; ruff и mypy чистые. Но тесты не покрывали ни один из дефектов ниже |
-| Данные в `bot.db` | 243 сообщения, последнее 08.07.2026; 4 чата; 34 задачи; 23 дайджеста |
-| Процессы | Бот, панель и Ollama не запущены; Ollama на этой машине не установлена |
+| Stack | Python 3.12, aiogram 3.13, FastAPI, SQLAlchemy 2 async, APScheduler, OpenAI-compatible client, SQLite locally / Postgres in Docker |
+| Telegram connection | Long polling (`app.polling`) or webhook (`app.main`) |
+| Bot token | **`401 Unauthorized`: the token is revoked or invalid, the bot will not start** |
+| AI model in `.env` | `llama-3.3-70b-versatile` on Groq: **`404 model_not_found`, the model has been retired** |
+| Cost | The Groq key works. Limits from the response headers: 1000 requests per day, 8000 tokens per minute |
+| Where data goes | **Groq cloud (USA)**, not local Ollama as previously believed |
+| Tests | 66 passed; ruff and mypy clean. But the tests covered none of the defects below |
+| Data in `bot.db` | 243 messages, the last from 08.07.2026; 4 chats; 34 tasks; 23 digests |
+| Processes | The bot, the panel and Ollama are not running; Ollama is not installed on this machine |
 
-## 2. Что работает, что частично, чего нет
+## 2. What works, what partly works, what is missing
 
-**Работает:** приём текста и подписей, сохранение, ручные задачи, кнопки статусов,
-настройка часового пояса и времени, веб-панель с токенами, метрики.
+**Works:** receiving text and captions, storage, manual tasks, status buttons,
+time zone and time settings, the web dashboard with tokens, metrics.
 
-**Частично:**
-- Ежедневный дайджест: есть, но с дефектами D1–D6.
-- Ответы на сообщения: `reply_to_message_id` сохраняется, но используется только для привязки к задаче.
-- Повторная обработка при сбоях: код есть, но для реальной LLM не срабатывает (A2).
-- Контекст: 10 последних сообщений и 10 задач на каждое сообщение, памяти о темах нет.
+**Partly works:**
+- Daily digest: exists, but with defects D1–D6.
+- Replies to messages: `reply_to_message_id` is stored but used only for linking to a task.
+- Retry on failures: the code exists but does not trigger for a real LLM (A2).
+- Context: the last 10 messages and 10 tasks for each message, no memory of topics.
 
-**Отсутствует:** темы, предложения, решения, блокеры, следующие действия, ссылки на источники,
-еженедельный дайджест, выбор периода, отправка в другой чат, разрешённые чаты и админы,
-хранение и удаление истории, импорт экспорта, защита от инъекций, правки сообщений,
-английские сроки.
+**Missing:** topics, proposals, decisions, blockers, next steps, links to sources,
+weekly digest, period selection, sending to another chat, allowed chats and admins,
+history retention and deletion, export import, injection protection, message edits,
+English deadlines.
 
-## 3. Найденные дефекты
+## 3. Defects found
 
-### A. Потеря данных
+### A. Data loss
 
-| # | Дефект | Доказательство |
+| # | Defect | Evidence |
 |---|---|---|
-| A1 | Сообщение сохраняется в одной транзакции с вызовом LLM. Пока LLM думает, SQLite заблокирована | Воспроизведено: из 3 параллельных сообщений 2 потеряны (`OperationalError`) |
-| A2 | Клиент LLM глотает ошибки и возвращает «шум», `pending_analysis` не ставится, повтор не запускается | Воспроизведено: после сбоя `pending_analysis=False` |
-| A3 | `drop_pending_updates=True` при старте выбрасывает всё, что пришло, пока бот был выключен | Код: `polling.py:25`, `main.py:35` |
-| A4 | Нет уникальности `(chat_id, telegram_message_id)` | Воспроизведено; в `bot.db` уже 2 группы дублей |
-| A5 | Поиск дублированного сообщения падает, поэтому ответ на него ломает анализ | Воспроизведено: `MultipleResultsFound` |
-| A6 | Время сообщения не хранится: `created_at` это время записи, а не отправки | Код: `models.py:101` |
-| A7 | Правки сообщений и медиа без подписи не сохраняются | Код: `handlers.py:455-463` |
+| A1 | A message is stored in the same transaction as the LLM call. While the LLM is thinking, SQLite is locked | Reproduced: of 3 parallel messages, 2 were lost (`OperationalError`) |
+| A2 | The LLM client swallows errors and returns "noise"; `pending_analysis` is not set and no retry starts | Reproduced: after a failure `pending_analysis=False` |
+| A3 | `drop_pending_updates=True` at startup throws away everything that arrived while the bot was off | Code: `polling.py:25`, `main.py:35` |
+| A4 | No uniqueness on `(chat_id, telegram_message_id)` | Reproduced; `bot.db` already has 2 groups of duplicates |
+| A5 | Looking up a duplicated message crashes, so a reply to it breaks analysis | Reproduced: `MultipleResultsFound` |
+| A6 | The message time is not stored: `created_at` is the write time, not the send time | Code: `models.py:101` |
+| A7 | Message edits and media without a caption are not stored | Code: `handlers.py:455-463` |
 
-### B. Качество анализа
+### B. Analysis quality
 
-| # | Дефект | Доказательство |
+| # | Defect | Evidence |
 |---|---|---|
-| B1 | Решения, блокеры и вопросы определяются как `message_type`, но отбрасываются | Код: `task_analyzer.py:114` |
-| B2 | Разные задачи склеиваются по похожести заголовка | Воспроизведено: «Интеграция API оплаты» / «…доставки» = 0.77 при пороге 0.6 |
-| B3 | Ложные сроки: «завтрак» → завтра, «среди прочего» → среда, «5 машин» → 5 мая | Воспроизведено |
-| B4 | Английские сроки не распознаются (`by Friday`) | Воспроизведено |
-| B5 | Один запрос к LLM на сообщение: не проходит по лимиту 8000 токенов в минуту на тысячах сообщений | Расчёт по лимитам ключа |
-| B6 | Текст сообщений вставляется в промпт без изоляции | Код: `openai_client.py:118` |
+| B1 | Decisions, blockers and questions are detected as `message_type` but then discarded | Code: `task_analyzer.py:114` |
+| B2 | Different tasks are merged by title similarity | Reproduced: «Интеграция API оплаты» / «…доставки» ("Payment API integration" / "…delivery") = 0.77 at a threshold of 0.6 |
+| B3 | False deadlines: «завтрак» (breakfast) → завтра (tomorrow), «среди прочего» (among other things) → среда (Wednesday), «5 машин» (5 cars) → 5 мая (May 5) | Reproduced |
+| B4 | English deadlines are not recognized (`by Friday`) | Reproduced |
+| B5 | One LLM request per message: does not fit the 8000 tokens per minute limit on thousands of messages | Calculated from the key's limits |
+| B6 | Message text is inserted into the prompt without isolation | Code: `openai_client.py:118` |
 
-### D. Дайджесты
+### D. Digests
 
-| # | Дефект | Доказательство |
+| # | Defect | Evidence |
 |---|---|---|
-| D1 | В дайджест за 24 часа попадают старые сообщения | Воспроизведено: сообщение 30-дневной давности попало |
-| D2 | Длинный дайджест не отправляется (лимит 4096 символов) | Воспроизведено: 27204 символа |
-| D3 | `sent_at` ставится до отправки, поэтому сбой отправки выглядит как успех | Воспроизведено |
-| D4 | Срабатывает только точная минута: перезапуск в 18:00 означает, что дайджеста за день не будет | Воспроизведено |
-| D5 | Ручной `/digest` отменяет дайджест по расписанию за этот день | Код: `scheduler.py:51-54` |
-| D6 | В LLM попадают только 50 сообщений, остальное игнорируется | Код: `openai_client.py:153` |
+| D1 | Old messages get into the 24-hour digest | Reproduced: a 30-day-old message got in |
+| D2 | A long digest is not sent (4096-character limit) | Reproduced: 27204 characters |
+| D3 | `sent_at` is set before sending, so a send failure looks like success | Reproduced |
+| D4 | Only the exact minute triggers it: a restart at 18:00 means no digest that day | Reproduced |
+| D5 | A manual `/digest` cancels the scheduled digest for that day | Code: `scheduler.py:51-54` |
+| D6 | Only 50 messages reach the LLM, the rest are ignored | Code: `openai_client.py:153` |
 
-### S. Безопасность
+### S. Security
 
-| # | Дефект | Доказательство |
+| # | Defect | Evidence |
 |---|---|---|
-| S1 | Нет списка разрешённых чатов: бот обрабатывает любой чат, куда его добавили | Код: `handlers.py` |
-| S2 | Любой участник меняет настройки чата | Код: `handlers.py:316-367` |
-| S3 | Кнопка статуса не проверяет, что задача принадлежит этому чату | Код: `handlers.py:433-439` |
-| S4 | Webhook не проверяет секрет, поддельные обновления принимаются | Код: `main.py:70` |
-| S5 | Панель полностью открыта, если `DASHBOARD_SECRET` пуст | Код: `routes.py:36-44` |
-| S6 | Ошибки SQLAlchemy попадают в лог с параметрами, то есть с текстом сообщений | Код: `session.py`, `error=str(e)` |
-| S7 | Нет настроек хранения: `raw_update_json` с персональными данными лежит бессрочно | Код |
-| S8 | Переписка уходит во внешний сервис без явного разрешения | `.env` |
-| S9 | `bot.db` и логи не в `.gitignore` | `.gitignore` |
+| S1 | No list of allowed chats: the bot processes any chat it is added to | Code: `handlers.py` |
+| S2 | Any member can change chat settings | Code: `handlers.py:316-367` |
+| S3 | The status button does not check that the task belongs to this chat | Code: `handlers.py:433-439` |
+| S4 | The webhook does not check the secret, forged updates are accepted | Code: `main.py:70` |
+| S5 | The dashboard is fully open if `DASHBOARD_SECRET` is empty | Code: `routes.py:36-44` |
+| S6 | SQLAlchemy errors go to the log with parameters, that is, with message text | Code: `session.py`, `error=str(e)` |
+| S7 | No retention settings: `raw_update_json` with personal data is kept forever | Code |
+| S8 | Conversations go to an external service without explicit permission | `.env` |
+| S9 | `bot.db` and logs are not in `.gitignore` | `.gitignore` |
 
-## 4. Оценка модели
+## 4. Model evaluation
 
-Модель из конфигурации оценить нельзя: она отключена. Доступные на ключе кандидаты проверены
-одним прогоном синтетической переписки из 10 сообщений (RU/EN, инъекция в сообщении 9).
+The configured model cannot be evaluated: it has been retired. The candidates available on the key were tested with
+one run of a synthetic conversation of 10 messages (RU/EN, injection in message 9).
 
-| Модель | Время | Токены ответа | Инъекция | Исполнитель и срок | Язык ответа |
+| Model | Time | Response tokens | Injection | Assignee and deadline | Response language |
 |---|---|---|---|---|---|
-| `qwen/qwen3.8-27b` | 1.6 с | 686 | Устояла | Верно | Русский |
-| `openai/gpt-oss-120b` | 3.4 с | 1498 | Устояла | Верно | В основном английский |
-| `openai/gpt-oss-20b` | 2.6 с | 2014 | **Не устояла: записала решение «release is approved»** | Потеряла | Смешанный |
+| `qwen/qwen3.8-27b` | 1.6 s | 686 | Resisted | Correct | Russian |
+| `openai/gpt-oss-120b` | 3.4 s | 1498 | Resisted | Correct | Mostly English |
+| `openai/gpt-oss-20b` | 2.6 s | 2014 | **Did not resist: recorded the decision "release is approved"** | Lost | Mixed |
 
-Это один прогон, для вывода о качестве его мало. Полный прогон по сценариям: [TEST_REPORT.md](TEST_REPORT.md).
+This is one run, which is too little to conclude anything about quality. Full run across scenarios: [TEST_REPORT.md](TEST_REPORT.md).
 
-**Решение:** по итогам полного прогона основная облачная модель `openai/gpt-oss-120b`. Смена
-вынужденная, поставщик сохраняется. Первоначальный выбор `qwen/qwen3.8-27b` по таблице выше оказался
-ошибочным: на переписке из 300 сообщений она стабильно теряла важные одиночные сообщения.
-`gpt-oss-20b` исключена.
+**Decision:** based on the full run, the main cloud model is `openai/gpt-oss-120b`. The change
+was forced; the provider stays the same. The initial choice of `qwen/qwen3.8-27b` based on the table above turned out to be
+wrong: on a 300-message conversation it consistently lost important single messages.
+`gpt-oss-20b` is excluded.
 
-**Корпоративные данные.** По документации Groq входные данные по умолчанию не хранятся, но могут
-логироваться до 30 дней для разбора инцидентов, если не включён Zero Data Retention; данные
-размещаются в США. Поэтому отправка наружу теперь запрещена, пока владелец данных явно не включит
-`LLM_EXTERNAL_ALLOWED=true`. Альтернатива без передачи данных: локальная Ollama (видеокарта
-RTX 3070 8 ГБ, 32 ГБ ОЗУ), она подключается тем же клиентом.
+**Corporate data.** According to the Groq documentation, input data is not stored by default, but may be
+logged for up to 30 days for incident review unless Zero Data Retention is enabled; the data
+is hosted in the USA. So sending data out is now forbidden until the data owner explicitly enables
+`LLM_EXTERNAL_ALLOWED=true`. An alternative with no data transfer: local Ollama (GPU
+RTX 3070 8 GB, 32 GB RAM), connected through the same client.
 
-## 5. План доработок
+## 5. Improvement plan
 
-**Критические**
-1. Сохранение сообщения отделено от LLM; уникальность сообщений; WAL и таймауты SQLite (A1, A4, A5).
-2. Ошибки LLM не считаются шумом; пакетный анализ с очередью и повторами (A2, B5).
-3. Обновления не выбрасываются при старте (A3).
-4. Разрешённые чаты, администраторы, запрет внешней отправки без согласия (S1–S3, S8).
-5. Темы и элементы с источниками: предложения, решения, задачи, вопросы, блокеры, действия (B1, B2).
-6. Защита от выдумок и инъекций на уровне кода, а не только промпта (B6).
-7. Новая модель по умолчанию и проверка доступности при старте.
+**Critical**
+1. Message storage separated from the LLM; message uniqueness; WAL and SQLite timeouts (A1, A4, A5).
+2. LLM errors are not treated as noise; batch analysis with a queue and retries (A2, B5).
+3. Updates are not thrown away at startup (A3).
+4. Allowed chats, admins, no external sending without consent (S1–S3, S8).
+5. Topics and items with sources: proposals, decisions, tasks, questions, blockers, actions (B1, B2).
+6. Protection against fabrication and injection at the code level, not only in the prompt (B6).
+7. A new default model and an availability check at startup.
 
-**Важные**
-8. Дайджесты: структура по темам, ежедневные и еженедельные, выбор периода, разбивка на части, догоняющая отправка, другой чат (D1–D6).
-9. Сроки: границы слов, английский язык, отсчёт от даты сообщения (B3, B4).
-10. Время отправки, правки, медиа, связи сообщений (A6, A7).
-11. Хранение и удаление истории; безопасное логирование; секрет webhook; панель (S4–S7, S9).
+**Important**
+8. Digests: structure by topic, daily and weekly, period selection, splitting into parts, catch-up sending, another chat (D1–D6).
+9. Deadlines: word boundaries, English, counting from the message date (B3, B4).
+10. Send time, edits, media, message links (A6, A7).
+11. History retention and deletion; safe logging; webhook secret; dashboard (S4–S7, S9).
 
-**Дополнительные**
-12. Импорт экспорта Telegram Desktop.
-13. Команда `/status`, скрипт оценки модели, миграция существующей `bot.db`.
+**Additional**
+12. Import of Telegram Desktop exports.
+13. `/status` command, model evaluation script, migration of the existing `bot.db`.
 
-## Источники
+## Sources
 
 - [Groq: Model Deprecation](https://console.groq.com/docs/deprecations)
 - [Groq: Rate Limits](https://console.groq.com/docs/rate-limits)

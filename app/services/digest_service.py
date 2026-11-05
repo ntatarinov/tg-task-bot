@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chat, Digest, Task, TopicItem, TopicItemKind, TopicItemStatus
 from app.db.repositories import DigestRepository, MessageRepository, TaskRepository, TopicRepository
+from app.i18n import chat_language, t
 from app.llm.base import BaseLLMClient, LLMError
 from app.utils.logging import get_logger
 from app.utils.periods import format_label
@@ -18,23 +19,11 @@ from app.utils.time import chat_timezone, ensure_aware_utc, now_utc
 
 logger = get_logger(__name__)
 
-NOT_DEFINED = "Не определено"
 MAX_CHUNK_CHARS = 3800  # Telegram's limit is 4096; leave room for entity overhead
 MAX_ITEM_CHARS = 400
 MAX_SOURCE_LINKS = 3
 MAX_SUMMARY_LINES = 10
 MERGE_BUDGET_CHARS = 8000
-
-TITLES: dict[str, str] = {
-    "daily": "Ежедневный дайджест",
-    "weekly": "Еженедельный дайджест",
-    "manual": "Дайджест",
-}
-TOTALS_TITLES: dict[str, str] = {
-    "daily": "Общие итоги дня",
-    "weekly": "Общие итоги недели",
-    "manual": "Общие итоги периода",
-}
 
 
 def message_link(telegram_chat_id: int, telegram_message_id: int) -> str | None:
@@ -102,25 +91,26 @@ class DigestService:
     ) -> Digest:
         """
         Compose a digest from stored topics. Every fact comes from rows that already
-        passed the analyzer's checks; the model only smooths "Обсудили" here. Nothing
+        passed the analyzer's checks; the model only smooths "Discussed" here. Nothing
         is marked as sent — that happens in deliver(), after Telegram accepts it.
         """
         tz = chat_timezone(chat.timezone)
+        lang = chat_language(chat)
         views = await self._collect_topics(chat, start, end)
-        summaries = await self._summaries(views)
+        summaries = await self._summaries(views, lang)
         replaced = await self.topic_repo.superseded_by([i.id for v in views.values() for i in v.items])
         manual_tasks = await self._manual_tasks(chat, start, end)
 
-        blocks = [f"<b>{TITLES[kind]} — {format_label(start, end, tz)}</b>"]
+        blocks = [f"<b>{t(lang, f'digest.title.{kind}')} — {format_label(start, end, tz)}</b>"]
         if views:
             for number, (topic_id, view) in enumerate(views.items(), 1):
                 blocks.append(self._render_topic(chat, number, view, summaries[topic_id], replaced))
         else:
-            blocks.append("За период рабочих тем не выявлено.")
+            blocks.append(t(lang, "digest.no_topics"))
         if manual_tasks:
-            blocks.append(self._render_manual_tasks(manual_tasks))
+            blocks.append(self._render_manual_tasks(manual_tasks, lang))
         if views:
-            blocks.append(self._render_totals(kind, list(views.values())))
+            blocks.append(self._render_totals(kind, list(views.values()), lang))
         notice = await self._render_notice(chat, start, end)
         if notice:
             blocks.append(notice)
@@ -170,10 +160,11 @@ class DigestService:
             view_for(item.topic).items.append(item)
         return views
 
-    async def _summaries(self, views: dict[int, _TopicView]) -> dict[int, str]:
+    async def _summaries(self, views: dict[int, _TopicView], lang: str) -> dict[int, str]:
         """One fragment is used as is. Several go through the model to remove repetition,
         and if it is unavailable the digest still goes out with the fragments joined."""
-        result = {topic_id: " ".join(v.fragments) or NOT_DEFINED for topic_id, v in views.items()}
+        not_defined = t(lang, "digest.not_defined")
+        result = {topic_id: " ".join(v.fragments) or not_defined for topic_id, v in views.items()}
         to_merge: dict[int, list[str]] = {}
         used = 0
         for topic_id, view in views.items():
@@ -183,7 +174,7 @@ class DigestService:
                 used += size
         if to_merge:
             try:
-                result.update(await self.llm.merge_summaries(to_merge))
+                result.update(await self.llm.merge_summaries(to_merge, language=lang))
             except LLMError as e:
                 logger.warning("digest.merge_failed", error=str(e))
         return result
@@ -200,51 +191,53 @@ class DigestService:
         summary: str,
         replaced: dict[int, TopicItem],
     ) -> str:
-        lines = [f"<b>Тема {number}. {html.escape(view.title)}</b>"]
+        lang = chat_language(chat)
+        not_defined = t(lang, "digest.not_defined")
+        lines = [f"<b>{t(lang, 'digest.topic', number=number, title=html.escape(view.title))}</b>"]
         if view.project:
-            lines.append(f"Проект: {html.escape(view.project)}")
-        lines.append(f"Обсудили: {html.escape(summary)}")
+            lines.append(t(lang, "digest.project", project=html.escape(view.project)))
+        lines.append(t(lang, "digest.discussed", summary=html.escape(summary)))
 
         decisions = view.of_kind(TopicItemKind.decision)
         tasks = view.of_kind(TopicItemKind.task)
 
-        lines.extend(self._section(chat, "Предложения (не приняты)", view.of_kind(TopicItemKind.proposal)))
+        lines.extend(self._section(chat, t(lang, "digest.proposals"), view.of_kind(TopicItemKind.proposal)))
         if decisions:
-            lines.append("Принятые решения:")
+            lines.append(f"{t(lang, 'digest.decisions')}:")
             for item in decisions:
                 line = f"• {self._item_text(chat, item)}"
                 old = replaced.get(item.id)
                 if old is not None:
-                    line += f" (заменяет: {html.escape(_clip(old.text))})"
+                    line += t(lang, "digest.replaces", old=html.escape(_clip(old.text)))
                 lines.append(line)
         else:
-            lines.append("Принятые решения: нет подтверждённых решений")
+            lines.append(t(lang, "digest.no_decisions"))
 
         if tasks:
-            lines.append("Задачи:")
+            lines.append(f"{t(lang, 'digest.tasks')}:")
             for item in tasks:
-                deadline = html.escape(item.deadline) if item.deadline else NOT_DEFINED
-                lines.append(f"• {self._item_text(chat, item)} — срок: {deadline}")
+                deadline = html.escape(item.deadline) if item.deadline else not_defined
+                lines.append(f"• {t(lang, 'digest.task_line', item=self._item_text(chat, item), deadline=deadline)}")
         else:
-            lines.append("Задачи: нет")
+            lines.append(t(lang, "digest.no_tasks"))
 
         owners = sorted({i.owner for i in tasks if i.owner})
         unassigned = any(not i.owner for i in tasks)
         if owners or unassigned:
             names = [html.escape(o) for o in owners]
             if unassigned:
-                names.append(f"{NOT_DEFINED} (часть задач без исполнителя)")
-            lines.append(f"Ответственные: {', '.join(names)}")
+                names.append(t(lang, "digest.some_unassigned", not_defined=not_defined))
+            lines.append(t(lang, "digest.owners", names=", ".join(names)))
         else:
-            lines.append(f"Ответственные: {NOT_DEFINED}")
+            lines.append(t(lang, "digest.owners", names=not_defined))
 
         questions = view.of_kind(TopicItemKind.question)
-        lines.extend(self._section(chat, "Блокеры и риски", view.of_kind(TopicItemKind.blocker)))
+        lines.extend(self._section(chat, t(lang, "digest.blockers"), view.of_kind(TopicItemKind.blocker)))
         if questions:
-            lines.extend(self._section(chat, "Открытые вопросы", questions))
+            lines.extend(self._section(chat, t(lang, "digest.questions"), questions))
         else:
-            lines.append("Открытые вопросы: нет")
-        lines.extend(self._section(chat, "Следующие действия", view.of_kind(TopicItemKind.next_action)))
+            lines.append(t(lang, "digest.no_questions"))
+        lines.extend(self._section(chat, t(lang, "digest.next_steps"), view.of_kind(TopicItemKind.next_action)))
         return "\n".join(lines)
 
     def _section(self, chat: Chat, title: str, items: list[TopicItem]) -> list[str]:
@@ -265,44 +258,48 @@ class DigestService:
         return f" {' '.join(refs)}" if refs else ""
 
     @staticmethod
-    def _render_manual_tasks(tasks: list[Task]) -> str:
-        lines = ["<b>Задачи, созданные вручную</b>"]
+    def _render_manual_tasks(tasks: list[Task], lang: str) -> str:
+        lines = [f"<b>{t(lang, 'digest.manual_tasks')}</b>"]
         for task in tasks:
-            owner = html.escape(task.assignee_text) if task.assignee_text else NOT_DEFINED
-            lines.append(f"• {html.escape(_clip(task.title))} — ответственный: {owner}")
+            owner = html.escape(task.assignee_text) if task.assignee_text else t(lang, "digest.not_defined")
+            lines.append(f"• {t(lang, 'digest.manual_task_line', title=html.escape(_clip(task.title)), owner=owner)}")
         return "\n".join(lines)
 
     @staticmethod
-    def _render_totals(kind: str, views: list[_TopicView]) -> str:
+    def _render_totals(kind: str, views: list[_TopicView], lang: str) -> str:
+        not_defined = t(lang, "digest.not_defined")
+
         def texts(item_kind: TopicItemKind) -> list[str]:
             return [html.escape(_clip(i.text, 160)) for v in views for i in v.of_kind(item_kind)]
 
         owners: dict[str, list[str]] = defaultdict(list)
         for view in views:
             for item in view.of_kind(TopicItemKind.task):
-                owners[item.owner or NOT_DEFINED].append(html.escape(_clip(item.text, 160)))
+                owners[item.owner or not_defined].append(html.escape(_clip(item.text, 160)))
 
-        lines = [f"<b>{TOTALS_TITLES[kind]}</b>"]
-        lines.extend(_totals_section("Что решили", texts(TopicItemKind.decision)))
-        lines.extend(_totals_section("Что необходимо сделать", texts(TopicItemKind.task)))
+        lines = [f"<b>{t(lang, f'digest.totals.{kind}')}</b>"]
+        lines.extend(_totals_section(t(lang, "digest.totals_decided"), texts(TopicItemKind.decision), lang))
+        lines.extend(_totals_section(t(lang, "digest.totals_todo"), texts(TopicItemKind.task), lang))
+        owners_title = t(lang, "digest.totals_owners")
         if owners:
-            lines.append("Кто за что отвечает:")
+            lines.append(f"{owners_title}:")
             for owner, tasks in sorted(owners.items()):
                 lines.append(f"• {html.escape(owner)}: {'; '.join(tasks[:MAX_SUMMARY_LINES])}")
         else:
-            lines.append(f"Кто за что отвечает: {NOT_DEFINED}")
-        lines.extend(_totals_section("Какие вопросы остались нерешёнными", texts(TopicItemKind.question)))
+            lines.append(f"{owners_title}: {not_defined}")
+        lines.extend(_totals_section(t(lang, "digest.totals_questions"), texts(TopicItemKind.question), lang))
         return "\n".join(lines)
 
     async def _render_notice(self, chat: Chat, start: datetime, end: datetime) -> str | None:
         """A digest must not look complete when it isn't."""
         pending, _ = await self.message_repo.pending_stats(chat.id)
         failed = await self.message_repo.count_failed(chat.id, start, end)
+        lang = chat_language(chat)
         lines = []
         if pending:
-            lines.append(f"⚠️ Ещё не проанализировано сообщений: {pending}. Они войдут в следующий отчёт.")
+            lines.append(t(lang, "digest.pending_notice", count=pending))
         if failed:
-            lines.append(f"⚠️ Не удалось проанализировать сообщений: {failed}.")
+            lines.append(t(lang, "digest.failed_notice", count=failed))
         return "\n".join(lines) or None
 
 
@@ -310,12 +307,12 @@ def _clip(text: str, limit: int = MAX_ITEM_CHARS) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
-def _totals_section(title: str, entries: list[str]) -> list[str]:
+def _totals_section(title: str, entries: list[str], lang: str) -> list[str]:
     if not entries:
-        return [f"{title}: нет"]
+        return [f"{title}: {t(lang, 'digest.none')}"]
     lines = [f"{title}:", *(f"• {e}" for e in entries[:MAX_SUMMARY_LINES])]
     if len(entries) > MAX_SUMMARY_LINES:
-        lines.append(f"…и ещё {len(entries) - MAX_SUMMARY_LINES}")
+        lines.append(t(lang, "digest.more", count=len(entries) - MAX_SUMMARY_LINES))
     return lines
 
 

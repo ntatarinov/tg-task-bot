@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pytz
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import i18n
 from app.config import settings
 from app.db.models import (
     Chat,
@@ -17,6 +18,7 @@ from app.db.models import (
     TopicItemStatus,
 )
 from app.db.repositories import MessageRepository, TaskRepository, TopicRepository, UserRepository
+from app.i18n import chat_language
 from app.llm.base import BaseLLMClient, LLMResponseError
 from app.llm.schemas import (
     BatchMessage,
@@ -258,6 +260,7 @@ class ConversationAnalyzer:
                 messages=payload,
                 topics=[self._topic_context(t) for t in known],
                 older_topics=[{"id": t.id, "title": t.title} for t in topics[KNOWN_TOPICS_LIMIT:]],
+                language=chat_language(chat),
             )
         except LLMResponseError as e:
             logger.warning("analyzer.bad_answer", chat_id=chat_id, size=len(batch), reason=str(e))
@@ -580,14 +583,14 @@ class ConversationAnalyzer:
         return AssigneeNotification(
             telegram_user_id=user.telegram_user_id,
             task_title=task.title,
-            chat_title=chat.title or "рабочий чат",
+            chat_title=chat.title or i18n.t(chat_language(chat), "bot.work_chat"),
         )
 
     async def _ask_owner(self, chat: Chat, task) -> ClarificationToAsk | None:
         """The question is a fixed template: model output never decides what the bot says."""
         if not await self.clarification_svc.can_ask(chat.id):
             return None
-        question = f"Кто возьмёт задачу «{task.title[:200]}»?"
+        question = i18n.t(chat_language(chat), "clarify.who_takes", title=task.title[:200])
         clarification = await self.clarification_svc.create(task=task, question=question)
         await self.task_repo.update(task, status=TaskStatus.needs_clarification)
         return ClarificationToAsk(clarification_id=clarification.id, question=question)

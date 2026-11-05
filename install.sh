@@ -12,8 +12,8 @@ default_model="gemma4:26b"
 
 if [ ! -f .env ]; then
     cp .env.example .env
-    echo "Создан файл .env. Заполните BOT_TOKEN, ALLOWED_CHAT_IDS, ADMIN_USER_IDS"
-    echo "и запустите установку ещё раз."
+    echo "Created the .env file. Fill in BOT_TOKEN, ALLOWED_CHAT_IDS, ADMIN_USER_IDS"
+    echo "and run the installer again."
     exit 1
 fi
 
@@ -33,11 +33,11 @@ chmod 600 .env
 if ! grep -q '^ADMIN_PANEL_PASSWORD=.' .env; then
     password="$(tr -dc 'a-z0-9' </dev/urandom | head -c 24)"
     set_default ADMIN_PANEL_PASSWORD "$password"
-    echo "Создан пароль панели управления: $password"
+    echo "Created a password for the control panel: $password"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
-    echo "Устанавливаю Docker..."
+    echo "Installing Docker..."
     curl -fsSL https://get.docker.com | sh
 fi
 
@@ -62,10 +62,10 @@ else
 
     files="-f docker-compose.selfhost.yml"
     if docker info 2>/dev/null | grep -qi nvidia; then
-        echo "Найдена видеокарта NVIDIA, модель будет работать на ней."
+        echo "Found an NVIDIA GPU, the model will run on it."
         files="$files -f docker-compose.gpu.yml"
     fi
-    echo "Первый запуск скачивает модель, это может занять несколько минут."
+    echo "The first start downloads the model, this can take several minutes."
 fi
 
 # shellcheck disable=SC2086
@@ -74,5 +74,5 @@ echo
 # shellcheck disable=SC2086
 docker compose $files exec -T bot python -m app.doctor || true
 echo
-echo "Логи бота:        docker compose $files logs -f bot"
-echo "Панель управления: ssh -L 8090:127.0.0.1:8090 <пользователь>@<сервер>, затем http://localhost:8090"
+echo "Bot logs:      docker compose $files logs -f bot"
+echo "Control panel: ssh -L 8090:127.0.0.1:8090 <user>@<server>, then http://localhost:8090"

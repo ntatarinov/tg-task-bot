@@ -174,9 +174,9 @@ async def test_chatid_shows_the_chat(harness):
     "provider, base_url, consent, expected",
     [
         ("mock", "", False, "mock"),
-        ("openai", "http://localhost:11434/v1", False, "локальная"),
-        ("openai", "https://api.groq.com/openai/v1", True, "внешний"),
-        ("openai", "https://api.groq.com/openai/v1", False, "приостановлен"),
+        ("openai", "http://localhost:11434/v1", False, "local model"),
+        ("openai", "https://api.groq.com/openai/v1", True, "external"),
+        ("openai", "https://api.groq.com/openai/v1", False, "paused"),
     ],
 )
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_status_for_each_model_setup(harness, monkeypatch, provider, base_
     await harness.send("/status")
 
     assert expected in harness.reply
-    assert "Сообщений в очереди: 0" in harness.reply
+    assert "Messages in the queue: 0" in harness.reply
 
 
 # --- Tasks -------------------------------------------------------------------
@@ -198,7 +198,7 @@ async def test_status_for_each_model_setup(harness, monkeypatch, provider, base_
 @pytest.mark.asyncio
 async def test_tasks_when_empty(harness):
     await harness.send("/tasks")
-    assert "Активных задач нет" in harness.reply
+    assert "No active tasks" in harness.reply
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_long_task_list_is_cut_short(harness):
         await harness.add_task(title=f"Задача {i}")
     await harness.send("/tasks")
 
-    assert "…и ещё 3" in harness.reply
+    assert "…and 3 more" in harness.reply
 
 
 @pytest.mark.parametrize(
@@ -236,7 +236,7 @@ async def test_manual_task_is_created(harness, command, title):
 @pytest.mark.asyncio
 async def test_manual_task_needs_text(harness):
     await harness.send("/task")
-    assert "Укажите текст задачи" in harness.reply
+    assert "Give the task text" in harness.reply
     assert await harness.query(select(Task)) == []
 
 
@@ -268,13 +268,13 @@ async def test_malformed_task_buttons_change_nothing(harness, data):
 @pytest.mark.asyncio
 async def test_button_of_a_missing_task(harness):
     await harness.press("task:999:done")
-    assert harness.toasts == ["Задача не найдена"]
+    assert harness.toasts == ["Task not found"]
 
 
 @pytest.mark.asyncio
 async def test_clarify_lists_open_questions(harness):
     await harness.send("/clarify")
-    assert "Нет задач, требующих уточнения" in harness.reply
+    assert "No tasks need clarification" in harness.reply
 
     task = await harness.add_task()
     async with harness.factory() as session:
@@ -290,8 +290,8 @@ async def test_clarify_lists_open_questions(harness):
 
 @pytest.mark.parametrize(
     "data, expected",
-    [("menu:tasks", "Активных задач нет"), ("menu:digest", "рабочих тем не выявлено"),
-     ("menu:clarify", "Нет задач"), ("menu:settings", "Настройки чата")],
+    [("menu:tasks", "No active tasks"), ("menu:digest", "No work topics found"),
+     ("menu:clarify", "No tasks"), ("menu:settings", "Chat settings")],
 )
 @pytest.mark.asyncio
 async def test_menu_buttons(harness, data, expected):
@@ -311,7 +311,7 @@ async def test_menu_buttons(harness, data, expected):
 async def test_digest_for_every_period_form(harness, arg):
     await harness.send(f"/digest{arg}")
 
-    assert "Дайджест —" in harness.reply
+    assert "Digest —" in harness.reply
     digests = await harness.query(select(Digest))
     assert len(digests) == 1 and digests[0].sent_at is not None
 
@@ -321,7 +321,7 @@ async def test_digest_for_every_period_form(harness, arg):
 async def test_digest_rejects_an_unreadable_period(harness, arg):
     await harness.send(f"/digest {arg}")
 
-    assert "Не понял период" in harness.reply
+    assert "didn't understand the period" in harness.reply
     assert await harness.query(select(Digest)) == []
 
 
@@ -349,7 +349,7 @@ async def test_digest_failure_is_reported_not_swallowed(harness, monkeypatch):
 
     await harness.send("/digest")
 
-    assert "Не удалось сформировать дайджест" in harness.reply
+    assert "Could not build the digest" in harness.reply
 
 
 # --- Settings: who may change what -------------------------------------------
@@ -382,20 +382,20 @@ async def test_digest_on_after_off(harness):
 @pytest.mark.parametrize(
     "command, expected",
     [
-        ("/set_timezone", "Укажите часовой пояс"),
-        ("/set_timezone Mars/Phobos", "Неизвестный часовой пояс"),
-        ("/set_digest_time", "Укажите время"),
-        ("/set_digest_time 25:00", "Неверный формат"),
-        ("/set_weekly", "Укажите день"),
-        ("/set_weekly пятница", "Укажите день"),
-        ("/set_digest_chat abc", "Укажите ID"),
+        ("/set_timezone", "Give a time zone"),
+        ("/set_timezone Mars/Phobos", "Unknown time zone"),
+        ("/set_digest_time", "Give the time"),
+        ("/set_digest_time 25:00", "Wrong time format"),
+        ("/set_weekly", "Give a day"),
+        ("/set_weekly пятница", "Give a day"),
+        ("/set_digest_chat abc", "Give a chat ID"),
         ("/set_digest_chat -999", "ALLOWED_CHAT_IDS"),
-        ("/reanalyze", "число дней"),
-        ("/reanalyze 0", "число дней"),
-        ("/reanalyze много", "число дней"),
-        ("/purge_history", "необратимо"),
-        ("/purge_history 30", "необратимо"),
-        ("/purge_history abc confirm", "необратимо"),
+        ("/reanalyze", "number of days"),
+        ("/reanalyze 0", "number of days"),
+        ("/reanalyze много", "number of days"),
+        ("/purge_history", "cannot be undone"),
+        ("/purge_history 30", "cannot be undone"),
+        ("/purge_history abc confirm", "cannot be undone"),
     ],
 )
 @pytest.mark.asyncio
@@ -414,7 +414,7 @@ async def test_members_are_refused_every_admin_command(harness, command):
     chat_before = await harness.chat()
     await harness.send(command)
 
-    assert "только администраторам" in harness.reply
+    assert "for bot admins only" in harness.reply
     assert (await harness.chat()).digest_time == chat_before.digest_time
 
 
@@ -436,7 +436,11 @@ async def test_settings_show_presets_and_current_values(harness):
     assert "Asia/Almaty" in harness.reply
     keyboard = next(c for c in harness.session.calls if isinstance(c, SendMessage)).reply_markup
     labels = [b.callback_data for row in keyboard.inline_keyboard for b in row]
-    assert labels == [f"digest_time:{t}" for t in ("18:00", "20:00", "21:00", "23:00")]
+    assert labels == [
+        *(f"digest_time:{t}" for t in ("18:00", "20:00", "21:00", "23:00")),
+        "language:en",
+        "language:ru",
+    ]
 
 
 @pytest.mark.parametrize("value", ["18:00", "20:00", "21:00", "23:00"])
@@ -451,7 +455,7 @@ async def test_member_cannot_use_time_presets(harness):
     await harness.press("digest_time:23:00")
 
     assert (await harness.chat()).digest_time == "18:00"
-    assert harness.toasts == ["Только для администраторов"]
+    assert harness.toasts == ["Admins only"]
 
 
 @pytest.mark.asyncio
@@ -464,7 +468,7 @@ async def test_reanalyze_requeues_recent_messages(harness):
 
     await harness.admin("/reanalyze 1")
 
-    assert "Поставлено в очередь на анализ: 1" in harness.reply
+    assert "Queued for analysis: 1" in harness.reply
     assert (await harness.query(select(MessageRow.pending_analysis))) == [True]
 
 
@@ -487,9 +491,9 @@ async def test_purge_history(harness, days, left):
 @pytest.mark.parametrize(
     "secret, url, fail_pin, expected",
     [
-        ("", "", False, "не настроен"),
-        ("s3cret", "https://example.com", False, "Задачи этого чата на сайте"),
-        ("s3cret", "https://example.com", True, "закрепить не получилось"),
+        ("", "", False, "not set up"),
+        ("s3cret", "https://example.com", False, "tasks on the site"),
+        ("s3cret", "https://example.com", True, "could not pin it"),
     ],
 )
 @pytest.mark.asyncio
@@ -761,3 +765,136 @@ async def test_foreign_button_press_is_only_acknowledged(harness):
 
 def test_forward_label_without_forward():
     assert handlers._forward_label(SimpleNamespace(forward_origin=None)) is None
+
+
+# --- Language ----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bot_answers_in_english_by_default(harness):
+    await harness.send("/tasks")
+    assert harness.reply == "No active tasks."
+
+
+@pytest.mark.parametrize("command", ["/language ru", "/language RU"])
+@pytest.mark.asyncio
+async def test_language_command_switches_the_chat(harness, command):
+    await harness.admin(command)
+
+    assert (await harness.chat()).language == "ru"
+    assert harness.reply == "✅ Язык этого чата: Русский"
+
+    await harness.send("/tasks")
+    assert "Активных задач нет." in harness.reply
+
+
+@pytest.mark.asyncio
+async def test_language_stays_per_chat(harness, monkeypatch):
+    other = -1009999
+    monkeypatch.setattr(settings, "allowed_chat_ids", f"{ALLOWED_CHAT},{other}")
+    await harness.admin("/language ru")
+
+    await harness.send("/tasks", chat_id=other)
+
+    assert harness.replies[-1] == "No active tasks."
+
+
+@pytest.mark.asyncio
+async def test_language_without_an_argument_offers_buttons(harness):
+    await harness.admin("/language")
+
+    sent = next(c for c in harness.session.calls if isinstance(c, SendMessage))
+    assert sent.text.startswith("Language of this chat: English")
+    assert [b.callback_data for b in sent.reply_markup.inline_keyboard[0]] == ["language:en", "language:ru"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_language_is_explained(harness):
+    await harness.admin("/language de")
+
+    assert "Unknown language: de" in harness.reply
+    assert (await harness.chat()).language is None
+
+
+@pytest.mark.asyncio
+async def test_language_is_for_admins(harness):
+    await harness.send("/language ru")
+
+    assert "for bot admins only" in harness.reply
+    assert (await harness.chat()).language is None
+
+
+@pytest.mark.asyncio
+async def test_language_button_switches_the_chat(harness):
+    await harness.press("language:ru", user_id=ADMIN_ID)
+
+    assert (await harness.chat()).language == "ru"
+    assert harness.toasts == ["✅ Язык этого чата: Русский"]
+
+
+@pytest.mark.asyncio
+async def test_language_button_refuses_members_and_forged_values(harness):
+    await harness.press("language:ru")
+    await harness.press("language:de", user_id=ADMIN_ID)
+
+    assert (await harness.chat()).language is None
+    assert harness.toasts[0] == "Admins only"
+
+
+@pytest.mark.parametrize(
+    "command, text",
+    [
+        ("/settings", "Настройки чата"),
+        ("/start", "Привет"),
+        ("/help", "что я умею"),
+        ("/status", "Сообщений в очереди"),
+        ("/digest потом", "Не понял период"),
+        ("/task", "Укажите текст задачи"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_russian_chat_gets_russian_replies(harness, command, text):
+    await harness.admin("/language ru")
+    await harness.send(command)
+    assert text in harness.reply
+
+
+@pytest.mark.asyncio
+async def test_refusal_comes_in_the_chats_language(harness):
+    await harness.admin("/language ru")
+    await harness.send("/reanalyze 7")
+    assert "только администраторам" in harness.reply
+
+
+@pytest.mark.asyncio
+async def test_settings_show_the_language(harness):
+    await harness.send("/settings")
+    assert "Language: English" in harness.reply
+
+
+@pytest.mark.parametrize(
+    "command, day, reply",
+    [
+        ("/set_weekly fri", 4, "Friday"),
+        ("/set_weekly FRI", 4, "Friday"),
+        ("/set_weekly пт", 4, "Friday"),
+        ("/set_weekly mon", 0, "Monday"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_weekdays_work_in_both_spellings(harness, command, day, reply):
+    await harness.admin(command)
+
+    assert (await harness.chat()).weekly_digest_day == day
+    assert reply in harness.reply
+
+
+@pytest.mark.asyncio
+async def test_task_buttons_follow_the_chat_language(harness):
+    await harness.admin("/language ru")
+    await harness.add_task(title="Задача")
+
+    await harness.send("/tasks")
+
+    cards = [c for c in harness.session.calls if isinstance(c, SendMessage) and "Задача" in c.text]
+    assert cards[-1].reply_markup.inline_keyboard[0][1].text == "✔️ Готово"

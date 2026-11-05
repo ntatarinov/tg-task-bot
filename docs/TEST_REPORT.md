@@ -1,110 +1,112 @@
-# Отчёт о тестировании
+# Test report
 
-Дата: 2026-11-04. Проверки шли на синтетических данных и на копии базы. Содержимое `bot.db` не менялось;
-запуск `app.doctor` перевёл её журнал в режим WAL, данные при этом не затронуты.
+All results in this report were measured with Russian model output; the English output mode, the default since 2026-11-05, has not been evaluated on a real model yet.
 
-## Итог
+Date: 2026-11-04. Checks ran on synthetic data and on a copy of the database. The contents of `bot.db` were not changed;
+running `app.doctor` switched its journal to WAL mode, which did not affect the data.
 
-| Проверка | Результат |
+## Summary
+
+| Check | Result |
 |---|---|
-| Автотесты (`pytest`) | 774 passed, 2 skipped |
-| Покрытие кода | 98% |
-| `ruff`, `mypy` | Чисто |
-| Проверки CI из чистой копии без `.env` | Прошли |
-| Настоящий процесс бота и поддельный Telegram API | 19 из 19, включая дайджесты по расписанию |
-| Настоящий процесс панели | Вход, настройки, перезапуск работают; токен не попадает в ответы и логи |
-| Архив для переноса | 258 тестов прошли из распакованной копии (на момент проверки) |
-| Обновление схемы на копии `bot.db` | Удалены 2 дубля, связи целы, `integrity_check: ok` |
+| Automated tests (`pytest`) | 774 passed, 2 skipped |
+| Code coverage | 98% |
+| `ruff`, `mypy` | Clean |
+| CI checks from a clean copy without `.env` | Passed |
+| Real bot process and fake Telegram API | 19 of 19, including scheduled digests |
+| Real panel process | Login, settings and restart work; the token does not reach responses or logs |
+| Move archive | 258 tests passed from the unpacked copy (at the time of the check) |
+| Schema update on a copy of `bot.db` | 2 duplicates removed, links intact, `integrity_check: ok` |
 
-Пропущенные тесты: проверка синтаксиса `install.sh` (в PowerShell нет рабочего `bash`, вручную через Git Bash
-проходит) и один случай с именем модели.
+Skipped tests: the `install.sh` syntax check (PowerShell has no working `bash`; it passes manually through Git Bash)
+and one case with a model name.
 
-### Что не проверялось
+### What was not verified
 
-- **Живой Telegram.** Бот ни разу не подключался к настоящему Telegram с новым токеном.
-- **Реальные рабочие переписки.** Качество измерено только на синтетике.
-- **Docker.** Демон был выключен: образ не собирался, `install.sh` и контейнеры не запускались. Проверены формат compose-файлов, синтаксис скрипта и шаг `pip install`.
-- **Postgres.** Код написан под оба диалекта, запускался только на SQLite.
-- **Панель в браузере.** Проверены API и синтаксис скриптов, но страницы не открывались в настоящем браузере.
+- **Live Telegram.** The bot has never connected to real Telegram with the new token.
+- **Real work conversations.** Quality was measured only on synthetic data.
+- **Docker.** The daemon was off: the image was not built, and `install.sh` and the containers were not run. Verified: the format of the compose files, the script syntax and the `pip install` step.
+- **Postgres.** The code is written for both dialects but was run only on SQLite.
+- **Panel in a browser.** The API and script syntax were checked, but the pages were not opened in a real browser.
 
-## Сценарии из задания
+## Scenarios from the assignment
 
-`pytest` с заранее заданным ответом модели проверяет код на всех сценариях. Живой прогон проверяет понимание.
+`pytest` with a predefined model response checks the code on all scenarios. The live run checks comprehension.
 
-| # | Сценарий | Ожидание | Проверка кода |
+| # | Scenario | Expected | Code check |
 |---|---|---|---|
-| 1 | Только русский | Решение, задача с исполнителем и сроком | Пройден |
-| 2 | Только английский | То же | Пройден |
-| 3 | Смешанная переписка | Одна тема, решение, задача | Пройден |
-| 4 | Одна тема, несколько участников | Одна тема, решение | Пройден |
-| 5 | Несколько тем одновременно | Темы не перемешаны | Пройден |
-| 6 | Возврат к старой теме | Тема продолжена | Пройден |
-| 7 | Предложение без решения | Решений нет, предложение сохранено | Пройден |
-| 8 | Решение изменено | Новое действует, старое заменено | Пройден |
-| 9 | Задача конкретному человеку | Исполнитель и срок | Пройден |
-| 10 | Задача без ответственного | Исполнитель и срок не выдуманы | Пройден |
-| 11 | Большая переписка | 300 и 3000 сообщений, размер запроса не растёт | Пройден |
-| 12 | Сбой модели или Telegram | Ничего не потеряно, отправка возобновляется | Пройден |
-| 13 | Повторная обработка | Одна запись, один анализ | Пройден |
-| 14 | Дайджест по расписанию | Один раз; пропуск догоняется | Пройден |
+| 1 | Russian only | Decision, task with assignee and deadline | Passed |
+| 2 | English only | Same | Passed |
+| 3 | Mixed conversation | One topic, decision, task | Passed |
+| 4 | One topic, several participants | One topic, decision | Passed |
+| 5 | Several topics at once | Topics not mixed | Passed |
+| 6 | Return to an old topic | Topic continued | Passed |
+| 7 | Proposal without a decision | No decisions, proposal stored | Passed |
+| 8 | Decision changed | New one applies, old one replaced | Passed |
+| 9 | Task for a specific person | Assignee and deadline | Passed |
+| 10 | Task without an owner | Assignee and deadline not invented | Passed |
+| 11 | Large conversation | 300 and 3000 messages, request size does not grow | Passed |
+| 12 | Model or Telegram failure | Nothing lost, sending resumes | Passed |
+| 13 | Repeated processing | One record, one analysis | Passed |
+| 14 | Scheduled digest | Once; a missed one is caught up | Passed |
 
-Дополнительные сценарии: инъекция, личный разговор, закрытие с доказательством, повторная жалоба, смена исполнителя,
-перенос срока, отмена задачи, короткое подтверждение, одинаковая задача в двух проектах, английский срок с упоминанием, жаргон.
+Additional scenarios: injection, personal conversation, closure with evidence, repeated complaint, change of assignee,
+deadline moved, task cancelled, short confirmation, same task in two projects, English deadline with a mention, jargon.
 
-## Модели
+## Models
 
-Итоговый прогон: финальный код и промпт, 21 короткий сценарий дважды и переписка на 300 сообщений трижды.
+Final run: final code and prompt, 21 short scenarios twice and a 300-message conversation three times.
 
-| Модель | Короткие сценарии | 300 сообщений | Где работает |
+| Model | Short scenarios | 300 messages | Where it runs |
 |---|---|---|---|
-| **`gemma4:26b`** (выбрана) | 41 из 42 | **3 из 3** | Локально, 18 ГБ |
-| `gemma4:12b` | 42 из 42 | 2 из 3: в одном прогоне потеряно решение | Локально, 8 ГБ |
-| `openai/gpt-oss-120b` | 21 из 21 | На финальном промпте не завершён из-за лимита Groq (429); 3 из 3 на прежнем наборе | Только облако: нужно 80 ГБ видеопамяти |
-| `qwen/qwen3.8-27b` | 23 из 23 на прежнем наборе | 0 из 4: теряет одиночные важные сообщения | Не рекомендуется |
-| `openai/gpt-oss-20b` | Не прогонялась | Не прогонялась | Поддалась инъекции |
+| **`gemma4:26b`** (selected) | 41 of 42 | **3 of 3** | Local, 18 GB |
+| `gemma4:12b` | 42 of 42 | 2 of 3: one run lost a decision | Local, 8 GB |
+| `openai/gpt-oss-120b` | 21 of 21 | Not completed on the final prompt because of the Groq limit (429); 3 of 3 on the previous set | Cloud only: needs 80 GB of video memory |
+| `qwen/qwen3.8-27b` | 23 of 23 on the previous set | 0 of 4: loses important single messages | Not recommended |
+| `openai/gpt-oss-20b` | Not run | Not run | Fell for the injection |
 
-Единственный провал `gemma4:26b`: в одном из двух прогонов сценария «перенос срока» новый срок не записан.
-Выборка мала, это основание для выбора, а не гарантия. `gpt-oss-120b` прогонялась один раз, а большой сценарий на финальном промпте оборвал лимит запросов, поэтому оценки качества по нему нет.
+The only `gemma4:26b` failure: in one of two runs of the "deadline moved" scenario, the new deadline was not recorded.
+The sample is small; this is a basis for the choice, not a guarantee. `gpt-oss-120b` was run once, and the large scenario on the final prompt was cut off by the request limit, so there is no quality assessment for it.
 
-Скорость локальной `gemma4:26b` с `reasoning_effort: none` на RTX 3070 8 ГБ и 32 ГБ ОЗУ: около 10 секунд на короткий сценарий,
-около 3,5 минуты на 300 сообщений. Без отключения рассуждений модель в 5 раз медленнее и обрезает ответы.
+Speed of local `gemma4:26b` with `reasoning_effort: none` on an RTX 3070 8 GB and 32 GB RAM: about 10 seconds per short scenario,
+about 3.5 minutes for 300 messages. Without disabling reasoning, the model is 5 times slower and truncates responses.
 
-Лимиты ключа Groq: 1000 запросов в сутки, 8000 токенов в минуту. При частых запросах срабатывает ошибка 429, бот
-оставляет сообщения в очереди до следующего тика.
+Groq key limits: 1000 requests per day, 8000 tokens per minute. Frequent requests trigger error 429; the bot
+keeps messages in the queue until the next tick.
 
-## Ошибки, найденные при тестировании и исправленные
+## Bugs found during testing and fixed
 
-| Ошибка | Чем найдена |
+| Bug | Found by |
 |---|---|
-| Изменённое решение склеивалось со старым: «релиз 10 ноября» и «релиз 17 ноября» | `pytest` |
-| Модель закрывала живые блокеры без оснований, и они пропадали из отчёта | Разбор результатов модели |
-| Закрытие старого решения без создания нового теряло актуальную дату | Живой прогон |
-| Настоящее решение понижалось до предложения, если модель не приложила цитату | Живой прогон |
-| Статусы вроде «логи в порядке» записывались как решения | Живой прогон |
-| Локальная модель обрезала ответы из-за рассуждений | Живой прогон |
-| `content_type` сохранялся как `ContentType.TEXT` | Тесты обработчиков |
-| Время правки сообщения терялось | Тесты обработчиков |
-| Битый часовой пояс останавливал анализ и отчёты чата | `pytest` |
-| Сбой в одном чате останавливал обработку остальных | Разбор кода, затем тест |
-| Всплеск сообщений от нового пользователя нарушал уникальность | `pytest` |
-| Mock-модель всегда возвращала пустой результат | `pytest` |
-| `install.sh` с переводами строк Windows не запустился бы на Linux | `pytest` |
-| Каждый перезапуск создавал бы полную копию базы | Разбор кода, затем тест |
-| Docker-образ не собирался | Воспроизведение шага сборки |
-| `.env` и `bot.db` попадали бы в Docker-образ | Разбор `Dockerfile` |
-| Правки из панели не применялись бы в Docker | Разбор конфигурации |
+| A changed decision was merged with the old one: «релиз 10 ноября» ("release on November 10") and «релиз 17 ноября» ("release on November 17") | `pytest` |
+| The model closed live blockers without grounds, and they disappeared from the report | Review of model results |
+| Closing an old decision without creating a new one lost the current date | Live run |
+| A real decision was downgraded to a proposal if the model did not attach a quote | Live run |
+| Statuses like «логи в порядке» ("logs are fine") were recorded as decisions | Live run |
+| The local model truncated responses because of reasoning | Live run |
+| `content_type` was stored as `ContentType.TEXT` | Handler tests |
+| The message edit time was lost | Handler tests |
+| A broken time zone stopped a chat's analysis and reports | `pytest` |
+| A failure in one chat stopped processing of the others | Code review, then a test |
+| A burst of messages from a new user violated uniqueness | `pytest` |
+| The mock model always returned an empty result | `pytest` |
+| `install.sh` with Windows line endings would not have run on Linux | `pytest` |
+| Every restart would have created a full copy of the database | Code review, then a test |
+| The Docker image did not build | Reproducing the build step |
+| `.env` and `bot.db` would have ended up in the Docker image | Review of the `Dockerfile` |
+| Panel edits would not have been applied in Docker | Configuration review |
 
-Были исправлены и ошибки в самих проверках: пустое утверждение в тесте Redis, тест соединения, проходивший из-за запрета
-отправки, и проверка сценария 8, считавшая провалом фразу «10 ноября отменяем» в новом решении.
+Bugs in the checks themselves were fixed too: an empty assertion in the Redis test, a connection test that passed because of the sending
+ban, and the scenario 8 check that treated the phrase «10 ноября отменяем» ("November 10 is cancelled") in the new decision as a failure.
 
-## Известные ограничения
+## Known limitations
 
-- Защита от инъекций распознаёт типовые формулировки. Необычная инъекция дойдёт до модели, защитой останутся инструкция в промпте и проверки кода.
-- Подтверждение решения определяется по словам («решили», «договорились», «подтверждаю» и другие). Решение другими словами станет предложением: это осознанно безопасная сторона ошибки.
-- Если база недоступна дольше трёх попыток, сообщение теряется и остаётся только запись в логе.
-- Удаление сообщений в Telegram бот не видит.
+- Injection protection recognizes typical wording. An unusual injection will reach the model; the instruction in the prompt and the code checks remain as protection.
+- Decision confirmation is detected by words («решили» (decided), «договорились» (agreed), «подтверждаю» (I confirm) and others). A decision in other words becomes a proposal: this is deliberately the safe side of the error.
+- If the database is unavailable for more than three attempts, the message is lost and only a log entry remains.
+- The bot cannot see message deletion in Telegram.
 
-## Как повторить
+## How to reproduce
 
 ```powershell
 .venv\Scripts\python.exe -m pytest --cov=app

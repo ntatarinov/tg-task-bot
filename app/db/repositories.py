@@ -61,6 +61,18 @@ class ChatRepository:
             chat.title = title
         return chat
 
+    async def get_language(self, telegram_chat_id: int) -> str | None:
+        """A chat's own language, without creating a row for one the bot has not stored yet."""
+        result = await self.session.execute(
+            select(Chat.language).where(Chat.telegram_chat_id == telegram_chat_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def set_language(self, chat: Chat, language: str | None) -> Chat:
+        chat.language = language
+        await self.session.flush()
+        return chat
+
     async def get_all_active(self) -> list[Chat]:
         result = await self.session.execute(select(Chat).where(Chat.is_active.is_(True)))
         return list(result.scalars().all())

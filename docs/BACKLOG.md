@@ -1,91 +1,92 @@
-# BACKLOG — задачи проекта (что просили и статус)
+# BACKLOG — project tasks (what was requested and status)
 
-> Список всех задач/запросов пользователя и их статус. **Перед тем как брать задачу:**
-> найди её здесь, проверь статус, и загляни в [JOURNAL.md](JOURNAL.md) — возможно, её
-> уже пробовали (и есть причина, почему сделано именно так).
+> A list of all tasks and user requests with their status. **Before taking a task:**
+> find it here, check its status, and look in [JOURNAL.md](JOURNAL.md): it may
+> already have been tried (and there may be a reason it was done this way).
 >
-> Статусы: ✅ сделано · 🔨 в работе · 📋 запланировано · ❌ решили не делать.
+> Statuses: ✅ done · 🔨 in progress · 📋 planned · ❌ decided not to do.
 
 ---
 
-## 🔨 В работе
+## 🔨 In progress
 
-### B-01. Личные уведомления исполнителю
-Когда задача назначена на `@username` — слать этому человеку **личное сообщение**
-«🔔 Тебе назначена задача: …».
-- **Ограничения Telegram:** исполнитель указан как `@username`; он должен один раз сам
-  написать боту `/start` в личке (бот не пишет первым — иначе `TelegramForbiddenError`).
-- **План:** `UserRepository.get_by_username`; `find_or_create_task` возвращает флаг
-  «создана»; `task_analyzer` при создании задачи с `@assignee` находит юзера и возвращает
-  уведомление наверх; `handle_message` шлёт его через `safe_send_message` (в try/except).
-- **Где делается:** на **Windows-компе** (там живёт прод-код). Не дублировать на Mac,
-  пока не синхронизируемся.
-
----
-
-## ✅ Сделано
-
-- **B-02. Сбор задач из чата без команд** — бот пассивно читает все сообщения (нужен
-  выключенный Privacy Mode у бота) и сам выделяет задачи; команды нужны только чтобы
-  посмотреть результат.
-- **B-03. LLM-анализ с абстракцией** — mock (по ключевым словам), OpenAI-совместимый
-  (OpenAI / Groq / локальная Ollama) — переключается только через `.env`.
-- **B-04. Отличать личное от рабочего** — усиленный промпт; в mock — эвристики. Реально
-  работает на нормальной модели (Groq/Ollama). Mock — грубо.
-- **B-05. Кластеризация сообщений в задачи** — reply / related_task_id / похожесть заголовка.
-- **B-06. Уточняющие вопросы + антиспам** — Redis cooldown с фолбэком на БД; reply на
-  вопрос бота закрывает уточнение и обновляет задачу.
-- **B-07. Ежедневный дайджест per-chat** — по timezone и времени каждого чата; ручной `/digest`.
-- **B-08. Дайджест только в выбранном чате** — поле `chats.digest_enabled`, команды
-  `/digest_on` / `/digest_off`. Сейчас включён только в **SAP СК**.
-- **B-09. Кнопочное меню** вместо команд — 📋 Задачи / 📊 Дайджест / ❓ Уточнения / ⚙️ Настройки.
-- **B-10. Управление статусом задач кнопками** — 🔄 В работу / ✔️ Готово / ❌ Отмена / 🔄 Возобновить.
-- **B-11. Поле «От кого» (постановщик)** — `tasks.reporter_text`, показывается в карточке/дайджесте.
-- **B-12. Корректные дедлайны** — детерминированный парсер дат ([app/utils/dates.py](../app/utils/dates.py));
-  модели даты не доверяем; нет фразы о сроке → нет дедлайна.
-- **B-13. Настройки чата командами** — `/set_timezone`, `/set_digest_time`.
-- **B-14. Медиа-сообщения** — ingestion подписей (caption) к фото/документам.
-- **B-15. Веб-панель и метрики** — `/dashboard`, `/api/*`, `/metrics` (Prometheus).
-- **B-16. Устойчивость** — retry `pending_analysis`, graceful Redis, safe-отправка Markdown.
-- **B-17. Локальный запуск и деплой** — polling, `init_db` для SQLite, `docker-compose.prod.yml`,
-  `DEPLOY.md`, перенос на **Windows + Groq** (`WINDOWS_SETUP.md`).
-- **B-26. Готовность репозитория** — `LICENSE` (MIT), GitHub Actions CI
-  (`.github/workflows/ci.yml`: ruff + mypy + pytest на каждый push/PR), навигация в README.
+### B-01. Direct notifications to the assignee
+When a task is assigned to `@username`, send that person a **direct message**:
+"🔔 You have been assigned a task: …".
+- **Telegram limits:** the assignee is given as `@username`; they must write `/start` to the bot
+  in a private chat once themselves (the bot does not write first, otherwise `TelegramForbiddenError`).
+- **Plan:** `UserRepository.get_by_username`; `find_or_create_task` returns a "created"
+  flag; when creating a task with `@assignee`, `task_analyzer` finds the user and returns
+  the notification upward; `handle_message` sends it through `safe_send_message` (in try/except).
+- **Where it is done:** on the **Windows PC** (the production code lives there). Do not duplicate on the Mac
+  until we sync.
 
 ---
 
-## 📋 Запланировано / идеи
+## ✅ Done
 
-- **B-18. Настоящий 24/7 без своего компа** — деплой на VPS/сервер (см. [DEPLOY.md](../DEPLOY.md)).
-  Отложено: пользователь пока держит бота на включённом Windows-компе. При Ollama на сервере
-  нужна RAM ≥16 ГБ; проще Groq.
-- **B-19. Автозапуск при включении компа** — launchd на Mac был заблокирован средой; на
-  Windows — Планировщик заданий или автозапуск .bat; на сервере — systemd/`restart: unless-stopped`.
-- **B-20. Точность дат** — расширить парсер (месяцы прописью полнее, «в начале/середине недели»),
-  либо модель крупнее.
-- **B-21. Импорт истории чата** — бот видит только сообщения после добавления. Разовый импорт
-  из JSON-экспорта Telegram Desktop через отдельный скрипт.
-- **B-22. Фильтр по теме форум-группы** — слушать только рабочую тему (`telegram_thread_id` уже в БД).
-- **B-23. Порог `task_min_confidence`** — не создавать задачу при низкой уверенности модели.
+- **B-02. Collecting tasks from a chat without commands** — the bot passively reads all messages (needs
+  Privacy Mode turned off for the bot) and extracts tasks itself; commands are needed only to
+  view the result.
+- **B-03. LLM analysis with an abstraction** — mock (by keywords), OpenAI-compatible
+  (OpenAI / Groq / local Ollama), switched only through `.env`.
+- **B-04. Telling personal from work** — a stronger prompt; heuristics in mock. Actually
+  works on a proper model (Groq/Ollama). Mock is crude.
+- **B-05. Clustering messages into tasks** — reply / related_task_id / title similarity.
+- **B-06. Clarifying questions + anti-spam** — Redis cooldown with a database fallback; a reply to
+  the bot's question closes the clarification and updates the task.
+- **B-07. Per-chat daily digest** — by each chat's timezone and time; manual `/digest`.
+- **B-08. Digest only in the selected chat** — the `chats.digest_enabled` field, commands
+  `/digest_on` / `/digest_off`. Currently enabled only in **SAP СК**.
+- **B-09. Button menu** instead of commands — 📋 Tasks / 📊 Digest / ❓ Clarifications / ⚙️ Settings.
+- **B-10. Task status control with buttons** — 🔄 Start / ✔️ Done / ❌ Cancel / 🔄 Reopen.
+- **B-11. "From" field (reporter)** — `tasks.reporter_text`, shown in the card and the digest.
+- **B-12. Correct deadlines** — a deterministic date parser ([app/utils/dates.py](../app/utils/dates.py));
+  the model is not trusted with dates; no deadline phrase means no deadline.
+- **B-13. Chat settings via commands** — `/set_timezone`, `/set_digest_time`.
+- **B-14. Media messages** — ingestion of captions for photos and documents.
+- **B-15. Web dashboard and metrics** — `/dashboard`, `/api/*`, `/metrics` (Prometheus).
+- **B-16. Resilience** — `pending_analysis` retry, graceful Redis, safe Markdown sending.
+- **B-17. Local run and deployment** — polling, `init_db` for SQLite, `docker-compose.prod.yml`,
+  `DEPLOY.md`, move to **Windows + Groq** (`WINDOWS_SETUP.md`).
+- **B-26. Repository readiness** — `LICENSE` (MIT), GitHub Actions CI
+  (`.github/workflows/ci.yml`: ruff + mypy + pytest on every push/PR), navigation in the README.
+- **B-25. i18n (multiple languages)** — done on 2026-11-05: English by default, Russian optional.
+  Previously rejected as overkill while the bot was Russian-only.
 
 ---
 
-## ❌ Решили не делать (по ТЗ / осознанно)
+## 📋 Planned / ideas
 
-- **B-24. Интеграции Jira / Linear / YouTrack / GitHub Issues** — ТЗ прямо исключает на первом этапе.
-- **B-25. i18n (многоязычность)** — бот русскоязычный; это была бы избыточная архитектура.
+- **B-18. Real 24/7 without my own computer** — deployment to a VPS/server (see [DEPLOY.md](../DEPLOY.md)).
+  Postponed: for now the user keeps the bot on a Windows PC that stays on. With Ollama on the server,
+  RAM ≥16 GB is needed; Groq is simpler.
+- **B-19. Autostart when the computer boots** — launchd on the Mac was blocked by the environment; on
+  Windows, Task Scheduler or a startup .bat; on a server, systemd/`restart: unless-stopped`.
+- **B-20. Date accuracy** — extend the parser (fuller coverage of spelled-out months, «в начале/середине недели»
+  ("at the start/middle of the week")), or use a larger model.
+- **B-21. Chat history import** — the bot sees only messages after it was added. A one-off import
+  from a Telegram Desktop JSON export through a separate script.
+- **B-22. Forum group topic filter** — listen only to the work topic (`telegram_thread_id` is already in the database).
+- **B-23. `task_min_confidence` threshold** — do not create a task when the model's confidence is low.
 
 ---
 
-## ✅ Сделано при переработке в Digest
+## ❌ Decided not to do (per the spec / deliberately)
 
-- **B-20. Анализ переписки по темам** — предложения, решения, задачи, ответственные, сроки, вопросы, блокеры со ссылками на сообщения.
-- **B-21. Ежедневные и еженедельные дайджесты** — период на выбор, отправка в другой чат, догоняющая отправка.
-- **B-22. Разрешённые чаты и администраторы, запрет внешней отправки без согласия, сроки хранения.**
-- **B-23. Панель управления** — проверка на тестовой переписке, смена модели, настройки, чаты.
-- **B-24. Перенос на сервер** — архив (`python -m app.bundle`) и `install.sh`.
-- **B-25. Импорт экспорта Telegram Desktop.**
+- **B-24. Jira / Linear / YouTrack / GitHub Issues integrations** — the spec explicitly excludes them from the first stage.
 
-## 📋 Запланировано
+---
 
-- **B-30. Первый запуск на настоящем Telegram и сервере** — Docker-образ и `install.sh` целиком ещё не запускались.
+## ✅ Done during the rework into Digest
+
+- **B-20. Topic-based conversation analysis** — proposals, decisions, tasks, owners, deadlines, questions, blockers with links to messages.
+- **B-21. Daily and weekly digests** — period of choice, sending to another chat, catch-up sending.
+- **B-22. Allowed chats and admins, no external sending without consent, retention periods.**
+- **B-23. Control panel** — check on a test conversation, model change, settings, chats.
+- **B-24. Moving to a server** — archive (`python -m app.bundle`) and `install.sh`.
+- **B-25. Import of Telegram Desktop exports.**
+
+## 📋 Planned
+
+- **B-30. First run on real Telegram and a server** — the Docker image and `install.sh` have not yet been run in full.

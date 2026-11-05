@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from app.config import settings
+from app.i18n import tr
 from app.llm.openai_client import OpenAILLMClient, is_local_endpoint
 
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,120}$")
@@ -30,9 +31,9 @@ def builtin_stacks() -> list[Stack]:
     local = settings.local_llm_url
     groq = "https://api.groq.com/openai/v1"
     return [
-        Stack("local-gemma4-26b", "Локально: gemma4:26b", local, "gemma4:26b", "ollama", "none", 6000, 900, True),
-        Stack("local-gemma4-12b", "Локально: gemma4:12b", local, "gemma4:12b", "ollama", "none", 6000, 900, True),
-        Stack("groq-gpt-oss-120b", "Облако Groq: gpt-oss-120b", groq, "openai/gpt-oss-120b", "", "", 2500, 60, True),
+        Stack("local-gemma4-26b", tr("stack.local", model="gemma4:26b"), local, "gemma4:26b", "ollama", "none", 6000, 900, True),
+        Stack("local-gemma4-12b", tr("stack.local", model="gemma4:12b"), local, "gemma4:12b", "ollama", "none", 6000, 900, True),
+        Stack("groq-gpt-oss-120b", tr("stack.groq", model="gpt-oss-120b"), groq, "openai/gpt-oss-120b", "", "", 2500, 60, True),
     ]
 
 
@@ -59,7 +60,7 @@ def current_stack() -> Stack:
     """What the bot is configured to use right now."""
     return Stack(
         id="current",
-        name="Текущие настройки",
+        name=tr("stack.current"),
         base_url=settings.openai_base_url,
         model=settings.openai_model,
         api_key=settings.openai_api_key,

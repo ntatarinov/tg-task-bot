@@ -35,6 +35,9 @@ from tests.helpers import BASE_TIME, analyze, feed, make_chat  # noqa: E402
 from tests.scenarios import SCENARIOS, Outcome, Scenario, load_outcome  # noqa: E402
 
 configure_logging("ERROR")
+# The scenarios check the model's text for Russian words, so results stay comparable
+# with docs/TEST_REPORT.md only with Russian output.
+settings.default_language = "ru"
 
 
 class PacedClient(OpenAILLMClient):
@@ -42,18 +45,18 @@ class PacedClient(OpenAILLMClient):
 
     pause_seconds = 20.0
 
-    async def analyze_conversation(self, messages, topics, older_topics):
+    async def analyze_conversation(self, messages, topics, older_topics, language="ru"):
         await asyncio.sleep(self.pause_seconds)
         for _ in range(5):
             try:
-                return await super().analyze_conversation(messages, topics, older_topics)
+                return await super().analyze_conversation(messages, topics, older_topics, language)
             except LLMUnavailableError as e:
                 # A rate limit says nothing about quality. The bot would simply retry
                 # on a later tick, so the evaluation waits too instead of scoring a failure.
                 if "429" not in str(e):
                     raise
                 await asyncio.sleep(65)
-        return await super().analyze_conversation(messages, topics, older_topics)
+        return await super().analyze_conversation(messages, topics, older_topics, language)
 
 
 async def _session_factory():
@@ -118,7 +121,7 @@ async def run_scenario(scenario: Scenario, llm: OpenAILLMClient) -> dict:
             "number": scenario.number,
             "name": scenario.name,
             "passed": False,
-            "failures": [f"ошибка модели: {e}"],
+            "failures": [f"model error: {e}"],
             "seconds": round(time.monotonic() - started, 1),
         }
     finally:
@@ -156,17 +159,17 @@ def check_large(outcome: Outcome) -> list[str]:
     decisions = outcome.open(TopicItemKind.decision)
     tasks = outcome.open(TopicItemKind.task)
     if not any("vault" in d.text.lower() for d in decisions):
-        failures.append("решение про Vault потеряно")
+        failures.append("the Vault decision was lost")
     if not any("vault" in t.text.lower() and t.owner and "дин" in t.owner.lower() for t in tasks):
-        failures.append("задача Дины по Vault потеряна")
+        failures.append("Dina's Vault task was lost")
     if not any("2026-11-20" == t.deadline for t in tasks):
-        failures.append("срок 20 ноября потерян")
+        failures.append("the November 20 deadline was lost")
     if not any("sca" in b.text.lower() or "лиценз" in b.text.lower() for b in outcome.open(TopicItemKind.blocker)):
-        failures.append("блокер про лицензию AD SCA потерян")
+        failures.append("the AD SCA license blocker was lost")
     if not any("бэкап" in i.text.lower() for i in outcome.items):
-        failures.append("вопрос про бэкапы потерян")
+        failures.append("the backups question was lost")
     if len(decisions) > 4:
-        failures.append(f"лишние решения из болтовни: {len(decisions)}")
+        failures.append(f"extra decisions from small talk: {len(decisions)}")
     # Nobody ever fixes the slow admin panel in this chat, so closing it hides a live problem.
     falsely_closed = [
         i
@@ -176,7 +179,7 @@ def check_large(outcome: Outcome) -> list[str]:
         and i.status == TopicItemStatus.resolved
     ]
     if falsely_closed:
-        failures.append("блокер про админку закрыт без оснований")
+        failures.append("the admin page blocker was closed without grounds")
     return failures
 
 
@@ -210,7 +213,7 @@ async def main() -> None:
             if args.out:
                 args.out.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    large = Scenario("11", "Большая переписка, 300 сообщений", [large_conversation()], check_large)
+    large = Scenario("11", "Large conversation, 300 messages", [large_conversation()], check_large)
     for run in range(1, args.large + 1):
         result = await run_scenario(large, llm)
         result["run"] = run
@@ -219,7 +222,7 @@ async def main() -> None:
         print(f"[{args.model}] run {run} #11 {mark} {result['failures']}", flush=True)
 
     passed = sum(r["passed"] for r in results)
-    print(f"[{args.model}] итого {passed}/{len(results)}", flush=True)
+    print(f"[{args.model}] total {passed}/{len(results)}", flush=True)
     if args.out:
         args.out.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
 

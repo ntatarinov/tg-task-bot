@@ -98,7 +98,7 @@ def _custom(client, **overrides):
         ("Аня: привет", [("Аня", "привет")]),
         ("Аня: первое\nБорис: второе", [("Аня", "первое"), ("Борис", "второе")]),
         ("Аня: первое\nпродолжение", [("Аня", "первое\nпродолжение")]),
-        ("без автора", [("Участник", "без автора")]),
+        ("без автора", [("Participant", "без автора")]),
         ("\n\nАня: с пустыми строками\n\n", [("Аня", "с пустыми строками")]),
         ("Аня: время 15:00 и ссылка http://x", [("Аня", "время 15:00 и ссылка http://x")]),
         ("", []),
@@ -204,7 +204,7 @@ def test_sandbox_reports_a_dead_model(client, monkeypatch):
     response = client.post("/api/sandbox", json={"stack_id": "current", "text": CHAT})
 
     assert response.status_code == 502
-    assert "Модель не ответила" in response.json()["detail"]
+    assert "did not answer" in response.json()["detail"]
 
 
 def test_text_goes_to_an_external_service_only_with_confirmation(client, monkeypatch):
@@ -224,7 +224,7 @@ def test_external_stack_without_a_key_is_explained(client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
     body = {"stack_id": "groq-gpt-oss-120b", "text": CHAT, "confirm_external": True}
 
-    assert "ключ" in client.post("/api/sandbox", json=body).json()["detail"]
+    assert "API key" in client.post("/api/sandbox", json=body).json()["detail"]
 
 
 # --- The client built for a stack --------------------------------------------
@@ -370,7 +370,7 @@ def test_cloud_stack_without_any_key_cannot_be_applied(client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
     response = client.post("/api/stacks/groq-gpt-oss-120b/apply", json={"confirm_external": True})
 
-    assert "ключ" in response.json()["detail"]
+    assert "API key" in response.json()["detail"]
 
 
 def test_custom_stack_brings_its_key(client, env_path):
@@ -432,7 +432,7 @@ async def test_failed_pull_is_reported(monkeypatch):
     await panel._pull_model("http://localhost:11434", "nope")
 
     assert panel.pull_state["status"] == "failed"
-    assert "Не удалось" in panel.pull_state["error"]
+    assert "Could not" in panel.pull_state["error"]
 
 
 @pytest.mark.parametrize("model", ["", "bad model", "x;y", "../etc"])

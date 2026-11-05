@@ -1,131 +1,138 @@
-# JOURNAL — история работы, попытки и решения
+# JOURNAL — work history, attempts and decisions
 
-> Хронология того, что уже делали, какие подходы **не сработали** и почему.
-> Читать перед задачей, чтобы не наступать на те же грабли. Новые заметные решения
-> дописывать сюда сверху вниз (в конец).
+> A chronology of what has already been done, which approaches **did not work** and why.
+> Read it before a task so you do not repeat the same mistakes. Append new notable decisions
+> here in order, top to bottom (at the end).
 
-Формат записи: **что делали → проблема → решение / что НЕ сработало**.
+Entry format: **what was done → problem → solution / what did NOT work**.
 
 ---
 
-## Фаза 1. Аудит базового MVP и доведение
+## Phase 1. Audit of the base MVP and finishing it
 
-Базовый каркас (модели, репозитории, mock-LLM, команды) существовал. Доделано:
-- Redis-клиент с graceful degradation (при недоступности — фолбэк на БД).
-- Планировщик переписан на **per-chat** (тик раз в минуту, сверка local time == digest_time чата) + джоба retry для `pending_analysis`.
-- Поток ответа на уточнение: добавлен `clarifications.question_message_id` (миграция 0002),
-  корректный `handle_possible_answer` (reply на вопрос бота → закрыть уточнение, обновить задачу).
-- **Баг:** `TaskMessageRepository.link` дважды дёргал `Result` (`scalar_one_or_none()` затем
-  `scalar_one()`) → чинён.
-- `safe_send_message`/`safe_answer` — fallback на plain text при ошибке Markdown.
+The base skeleton (models, repositories, mock LLM, commands) existed. Finished:
+- Redis client with graceful degradation (falls back to the database when unavailable).
+- The scheduler was rewritten **per-chat** (a tick once a minute, checking local time == the chat's digest_time) + a retry job for `pending_analysis`.
+- Clarification reply flow: added `clarifications.question_message_id` (migration 0002),
+  a correct `handle_possible_answer` (reply to the bot's question → close the clarification, update the task).
+- **Bug:** `TaskMessageRepository.link` consumed `Result` twice (`scalar_one_or_none()` then
+  `scalar_one()`) → fixed.
+- `safe_send_message`/`safe_answer` — fallback to plain text on a Markdown error.
 
-## Фаза 2. Roadmap-фичи
+## Phase 2. Roadmap features
 
-- Ingestion подписей к медиа (`message.caption`).
-- Команды `/set_timezone`, `/set_digest_time` (+ валидаторы tz/HH:MM).
-- Inline-кнопки статусов задач (`on_task_action`, стейт-машина).
+- Ingestion of media captions (`message.caption`).
+- Commands `/set_timezone`, `/set_digest_time` (+ tz/HH:MM validators).
+- Inline task status buttons (`on_task_action`, state machine).
 - REST API (`/api/chats`, `/api/chats/{id}/tasks`) + HTML `/dashboard`.
-- Prometheus `/metrics` (graceful — no-op, если библиотека не установлена).
-- **Сознательно НЕ делали** (по ТЗ): интеграции Jira/Linear/GitHub Issues; i18n.
+- Prometheus `/metrics` (graceful: no-op if the library is not installed).
+- **Deliberately NOT done** (per the spec): Jira/Linear/GitHub Issues integrations; i18n.
 
-## Фаза 3. Первый живой запуск (локально, Mac)
+## Phase 3. First live run (local, Mac)
 
-- Создан `.env`, `app/init_db.py` (create_all для SQLite).
-- **Проблема:** `create_async_engine(..., pool_size=..., max_overflow=...)` падал на SQLite
-  (`TypeError`). → Пул-параметры теперь только для не-SQLite (`app/db/session.py`).
-- **`ruff --fix` сломал `models.py`:** переписал `Mapped[Optional[str]]` → `Mapped[str | None]`,
-  что валит SQLAlchemy на Python 3.9 (PEP 604 в рантайме только 3.10+). → откат на
-  `Optional`/`List` + `per-file-ignores` в `pyproject.toml`. **Не повторять.**
+- Created `.env` and `app/init_db.py` (create_all for SQLite).
+- **Problem:** `create_async_engine(..., pool_size=..., max_overflow=...)` crashed on SQLite
+  (`TypeError`). → Pool parameters are now only for non-SQLite (`app/db/session.py`).
+- **`ruff --fix` broke `models.py`:** it rewrote `Mapped[Optional[str]]` → `Mapped[str | None]`,
+  which crashes SQLAlchemy on Python 3.9 (PEP 604 at runtime is 3.10+ only). → Rolled back to
+  `Optional`/`List` + `per-file-ignores` in `pyproject.toml`. **Do not repeat.**
 
-## Фаза 4. Фиксы по горячим следам
+## Phase 4. Quick fixes right after the run
 
-- **`/help` молчал:** в тексте были `/set_timezone` и `/set_digest_time` — символ `_`
-  Telegram Markdown принял за курсив, «can't find end of entity», всё сообщение
-  отклонялось. → `/help` и `/start` шлём как plain / через `safe_answer`.
-- Меню переведено на **inline-кнопки** (`_main_menu_keyboard`, `on_menu`, вынесены `_send_*`).
+- **`/help` was silent:** the text contained `/set_timezone` and `/set_digest_time`; Telegram Markdown
+  took the `_` character for italics, "can't find end of entity", and the whole message
+  was rejected. → `/help` and `/start` are sent as plain text / through `safe_answer`.
+- The menu was moved to **inline buttons** (`_main_menu_keyboard`, `on_menu`, `_send_*` extracted).
 
-## Фаза 5. Локальная LLM (Ollama) вместо mock
+## Phase 5. Local LLM (Ollama) instead of mock
 
-- Поставили Ollama (brew), модель `qwen2.5:7b`. `.env` → OpenAI-совместимый
-  `http://localhost:11434/v1`. Тот же `OpenAILLMClient`.
-- Усилен системный промпт: явно «игнорируй личное/бытовое/юмор/оффтоп».
-- **Проблема:** локальные модели оборачивают JSON в ```-блоки / добавляют текст. →
-  `_extract_json` (срезает обёртки, берёт внешний `{...}`).
-- **Проблема:** модель присылала `"priority": null` → Pydantic отвергал весь ответ. →
-  `MessageAnalysis` получил валидаторы-нормализаторы (null/невалид → дефолт, а не краш).
-  ⚠️ Это сознательно поменяло контракт: схема больше не кидает ValidationError на
-  невалидный priority/confidence, а нормализует.
+- Installed Ollama (brew), model `qwen2.5:7b`. `.env` → OpenAI-compatible
+  `http://localhost:11434/v1`. The same `OpenAILLMClient`.
+- Strengthened the system prompt: explicitly "ignore personal/household/humor/off-topic".
+- **Problem:** local models wrap JSON in ``` blocks or add text. →
+  `_extract_json` (strips the wrappers, takes the outer `{...}`).
+- **Problem:** the model sent `"priority": null` → Pydantic rejected the whole response. →
+  `MessageAnalysis` got normalizing validators (null/invalid → default, not a crash).
+  ⚠️ This deliberately changed the contract: the schema no longer raises ValidationError on
+  an invalid priority/confidence, it normalizes them.
 
-## Фаза 6. Даты (важно!)
+## Phase 6. Dates (important!)
 
-- **Проблема:** модель ставила дедлайн с прошлым годом (`2023-...`), т.к. не знает «сегодня».
-- Попытка 1: передали текущую дату в промпт (`_today_str`). **НЕ помогло надёжно** — 7B
-  игнорировала.
-- **Проблема 2:** модель выдумывала дедлайн, которого в сообщении вообще не было.
-- **Решение:** перестали доверять модели даты. `app/utils/dates.py` — детерминированный
-  парсер русских выражений («до среды», «к 5 июля», «через 3 дня», «до конца недели»,
-  «DD.MM») от реального «сегодня». Дедлайн берётся **только** из явного текста; нет фразы
-  → нет дедлайна. Подключено в `task_analyzer` (`normalize_deadline`).
+- **Problem:** the model set deadlines with a past year (`2023-...`) because it does not know "today".
+- Attempt 1: passed the current date into the prompt (`_today_str`). **Did NOT help reliably**: the 7B model
+  ignored it.
+- **Problem 2:** the model invented deadlines that were not in the message at all.
+- **Solution:** stopped trusting the model with dates. `app/utils/dates.py` is a deterministic
+  parser of Russian expressions («до среды» (by Wednesday), «к 5 июля» (by July 5), «через 3 дня» (in 3 days),
+  «до конца недели» (by the end of the week), «DD.MM») relative to the real "today". A deadline is taken **only** from explicit text; no phrase
+  means no deadline. Wired into `task_analyzer` (`normalize_deadline`).
 
-## Фаза 7. Поле «От кого» (постановщик)
+## Phase 7. "From" field (reporter)
 
-- `tasks.reporter_text` (модель + миграция 0003 + `ALTER TABLE` на живой `bot.db`).
-- Заполняется автором сообщения (`_user_label`), для `/task` — автором команды.
-  Показывается в `/tasks`, дайджесте, API.
+- `tasks.reporter_text` (model + migration 0003 + `ALTER TABLE` on the live `bot.db`).
+- Filled with the message author (`_user_label`), for `/task` with the command author.
+  Shown in `/tasks`, the digest and the API.
 
-## Фаза 8. Автономная работа на Mac
+## Phase 8. Autonomous running on the Mac
 
-- **Цель:** бот работает, когда не трогаешь ноут.
-- **Попытка launchd** (`~/Library/LaunchAgents/*.plist`) — **заблокирована** защитой
-  среды как «unauthorized persistence». → отказались от автозагрузки.
-- **Решение:** запустили `ollama serve`, `app.polling` и `caffeinate -dis` как отвязанные
-  фоновые процессы (`nohup`). `caffeinate` не даёт Mac спать при открытой крышке.
-  Ограничение честно озвучено: переживает сон, но не перезагрузку; закрытая крышка = сон.
+- **Goal:** the bot keeps working when the laptop is left alone.
+- **launchd attempt** (`~/Library/LaunchAgents/*.plist`) was **blocked** by the environment's
+  protection as "unauthorized persistence". → Gave up on autostart.
+- **Solution:** started `ollama serve`, `app.polling` and `caffeinate -dis` as detached
+  background processes (`nohup`). `caffeinate` keeps the Mac from sleeping with the lid open.
+  The limitation was stated openly: it survives sleep but not a reboot; a closed lid means sleep.
 
-## Фаза 9. Дайджест только в одном чате
+## Phase 9. Digest in only one chat
 
-- Пользователь: дайджест шлётся везде (личка + 2 группы), нужен только в «SAP СК».
-- Добавлено поле `chats.digest_enabled` (миграция 0004 + `ALTER` на `bot.db`), фильтр в
-  `scheduler.digest_tick`, команды `/digest_on` / `/digest_off`, показ в `/settings`.
-- В БД проставлено: `digest_enabled=1` только для SAP СК (tg_id `-5277304015`), остальным `0`.
+- User: the digest goes everywhere (private chat + 2 groups), it is only needed in "SAP СК".
+- Added the `chats.digest_enabled` field (migration 0004 + `ALTER` on `bot.db`), a filter in
+  `scheduler.digest_tick`, commands `/digest_on` / `/digest_off`, display in `/settings`.
+- Set in the database: `digest_enabled=1` only for SAP СК (tg_id `-5277304015`), `0` for the others.
 
-## Фаза 10. Переезд на Windows + Groq
+## Phase 10. Move to Windows + Groq
 
-- Причина: Mac грелся от локальной модели. Решение — облачный **Groq** (комп не считает,
-  не греется). Тот же `OpenAILLMClient`, только `.env`.
-- Собран `tg-task-bot.zip` (без `.venv`/кэшей/логов, с `bot.db` и `.env`), `WINDOWS_SETUP.md`.
-- **`aiosqlite` перенесён из dev в основные зависимости** (нужен для запуска на SQLite).
-- Серия проблем чистой установки на Windows (важно для будущего):
-  1. **hatchling** не находил пакет (имя проекта `tg_task_bot` ≠ папка `app`) →
+- Reason: the Mac was overheating from the local model. Solution: cloud **Groq** (the computer does no computing
+  and does not heat up). The same `OpenAILLMClient`, only `.env` changes.
+- Built `tg-task-bot.zip` (without `.venv`/caches/logs, with `bot.db` and `.env`) and `WINDOWS_SETUP.md`.
+- **`aiosqlite` was moved from dev to the main dependencies** (needed to run on SQLite).
+- A series of clean-install problems on Windows (important for the future):
+  1. **hatchling** did not find the package (project name `tg_task_bot` ≠ folder `app`) →
      `[tool.hatch.build.targets.wheel] packages = ["app"]`.
-  2. **`psycopg2-binary`** требовал компилятор и не нужен → **удалён** (используем asyncpg/aiosqlite).
-  3. **Конфликт версий:** `pydantic==2.10.3` несовместим с `aiogram 3.13.1` → пиннут `==2.9.2`.
-  4. Пользователь поставил **Python 3.14** — для него нет готовых wheels, требовался
-     компилятор → поставили **Python 3.12** (прямая ссылка на 3.12.8).
-  5. **`greenlet==3.2.5`** компилировался на Windows → заменён на **`greenlet==3.1.1`** (есть wheel).
-- Итог: бот успешно запущен на Windows через Groq.
-- **Урок доставки:** прод-код теперь на Windows-компе, отдельном от Mac. Новые
-  изменения вносятся на том компе, где запущен бот
-  (см. BACKLOG — «личные уведомления исполнителю»).
+  2. **`psycopg2-binary`** required a compiler and is not needed → **removed** (we use asyncpg/aiosqlite).
+  3. **Version conflict:** `pydantic==2.10.3` is incompatible with `aiogram 3.13.1` → pinned to `==2.9.2`.
+  4. The user installed **Python 3.14**: there are no prebuilt wheels for it and a compiler was required
+     → installed **Python 3.12** (direct link to 3.12.8).
+  5. **`greenlet==3.2.5`** was compiling on Windows → replaced with **`greenlet==3.1.1`** (has a wheel).
+- Result: the bot runs successfully on Windows through Groq.
+- **Delivery lesson:** the production code now lives on the Windows PC, separate from the Mac. New
+  changes are made on the computer where the bot runs
+  (see BACKLOG, "direct notifications to the assignee").
 
-## Фаза 11. Личные уведомления исполнителю (в процессе)
+## Phase 11. Direct notifications to the assignee (in progress)
 
-- Запрос: при назначении задачи на `@username` — слать этому человеку личное сообщение.
-- Ограничения Telegram: исполнитель должен быть указан как `@username` и должен один раз
-  сам написать боту `/start` в личке (бот не пишет первым).
-- Реализуется на Windows-компе, где запущен прод-бот. Статус — в BACKLOG.
+- Request: when a task is assigned to `@username`, send that person a direct message.
+- Telegram limits: the assignee must be given as `@username` and must write `/start` to the bot
+  in a private chat once themselves (the bot does not write first).
+- Being implemented on the Windows PC where the production bot runs. Status is in BACKLOG.
 
 ---
 
-## Фаза: переработка в Digest
+## Phase: rework into Digest
 
-Бот переименован из «Тудушки» в Digest и переделан из выделения задач в анализ переписки по темам.
-Подробности: [AUDIT.md](AUDIT.md) и [TEST_REPORT.md](TEST_REPORT.md).
+The bot was renamed from "Tudushka" (Тудушка) to Digest and rebuilt from task extraction into topic-based conversation analysis.
+Details: [AUDIT.md](AUDIT.md) and [TEST_REPORT.md](TEST_REPORT.md).
 
-- Анализ по одному сообщению → **проблема:** лимиты бесплатного тарифа и потеря сообщений при медленной модели. **Решение:** сообщение сохраняется сразу, анализ идёт пакетами из очереди (`conversation_analyzer.py`). `task_analyzer.py` удалён.
-- Ответу модели нельзя верить на слово → решения, исполнители, сроки и закрытие элементов проверяются кодом по исходным сообщениям.
-- **Не сработало:** выбор `qwen3.8-27b` по одному прогону. На короткой переписке модель хороша, на 300 сообщениях стабильно теряла одиночные важные сообщения. Модель выбирается только с большим сценарием.
-- **Не сработало:** `gemma4` с настройками по умолчанию. Рассуждения съедают лимит ответа. Нужен `reasoning_effort: none`, а `think=false` через `/v1` Ollama игнорирует.
-- **Не сработало:** закрытие элементов без доказательств. Модель закрывала живые блокеры и решения. Закрытие требует цитаты из другого сообщения, решение можно только заменить.
-- **Не сработало:** похожесть текста без учёта чисел: «релиз 10 ноября» и «релиз 17 ноября» считались дублем.
-- `write_text` на Windows превращает переводы строк в CRLF и ломает `install.sh`. Закреплено в `.gitattributes`.
+- Analysis one message at a time → **problem:** free tier limits and message loss with a slow model. **Solution:** a message is stored immediately, and analysis runs in batches from a queue (`conversation_analyzer.py`). `task_analyzer.py` was removed.
+- The model's response cannot be taken at its word → decisions, assignees, deadlines and item closures are checked by code against the source messages.
+- **Did not work:** choosing `qwen3.8-27b` from one run. The model is good on a short conversation, but on 300 messages it consistently lost important single messages. A model is chosen only with the large scenario.
+- **Did not work:** `gemma4` with default settings. Reasoning eats up the response limit. `reasoning_effort: none` is needed, and Ollama ignores `think=false` through `/v1`.
+- **Did not work:** closing items without evidence. The model closed live blockers and decisions. Closing requires a quote from another message, and a decision can only be replaced.
+- **Did not work:** text similarity that ignores numbers: «релиз 10 ноября» ("release on November 10") and «релиз 17 ноября» ("release on November 17") were counted as duplicates.
+- On Windows, `write_text` turns line endings into CRLF and breaks `install.sh`. Fixed in `.gitattributes`.
+
+## Phase: English by default (2026-11-05)
+
+- Owner request: English by default → bot messages, digests, the task site, the panel and the docs are now English by default, with Russian as an option (`/language` per chat, `DEFAULT_LANGUAGE` for the rest). This reverses the Phase 2 decision not to do i18n; see BACKLOG B-25.
+- The chat language also sets the language of what the model writes. Quotes stay in the original language, and text already stored is not rewritten when the language changes. Russian and English messages and command arguments are understood whatever the chat language is.
+- User-facing docs have `.ru.md` copies; internal docs in `docs/` are English only.
+- **Not evaluated:** the English model output mode has not been evaluated on a real model yet. All results in [TEST_REPORT.md](TEST_REPORT.md) were measured with Russian output.
